@@ -19,6 +19,29 @@ def _result_label(won: bool | None) -> str:
     return "?"
 
 
+def _render_gemini_section(*, ai_enabled: bool, ai_comment: str | None) -> list[str]:
+    lines = [
+        "## Gemini AI Koçluk Yorumu",
+        "",
+    ]
+    if not ai_enabled:
+        lines.append(
+            "_AI yorumu kapalı. Açmak için `--ai` parametresiyle çalıştırın._"
+        )
+        lines.append("")
+        return lines
+
+    if ai_comment:
+        lines.append(ai_comment)
+    else:
+        lines.append(GEMINI_UNAVAILABLE_LABEL)
+    lines.append("")
+    return lines
+
+
+GEMINI_UNAVAILABLE_LABEL = "Gemini AI yorumu alınamadı"
+
+
 def _render_coaching_section(coaching: dict[str, Any]) -> list[str]:
     lines = [
         "## Koçluk Yorum Taslağı (Level 5–9)",
@@ -122,6 +145,8 @@ def write_markdown_report(
     coaching: dict[str, Any] | None = None,
     memory: dict[str, Any] | None = None,
     confidence: dict[str, Any] | None = None,
+    ai_enabled: bool = False,
+    ai_comment: str | None = None,
 ) -> str:
     """Normalize edilmiş veri ve özetten Markdown rapor metni üretir."""
     profile = normalized.get("profile") or {}
@@ -263,6 +288,7 @@ def write_markdown_report(
 
     lines.append("")
     lines.extend(_render_coaching_section(coaching))
+    lines.extend(_render_gemini_section(ai_enabled=ai_enabled, ai_comment=ai_comment))
 
     lines.extend(
         [

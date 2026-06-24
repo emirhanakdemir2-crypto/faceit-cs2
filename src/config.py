@@ -19,6 +19,7 @@ GAME_ID = "cs2"
 DEFAULT_MATCH_COUNT = 20
 
 MISSING_DATA_LABEL = "veri eksik"
+GEMINI_DEFAULT_MODEL = "gemini-2.5-flash"
 
 
 def load_config() -> None:
@@ -33,6 +34,17 @@ def get_api_key() -> str:
         raise ValueError(
             "FACEIT_API_KEY bulunamadı. .env dosyasına anahtarınızı ekleyin "
             "(bkz. .env.example)."
+        )
+    return key
+
+
+def get_gemini_api_key() -> str:
+    load_config()
+    key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not key:
+        raise ValueError(
+            "GEMINI_API_KEY bulunamadı. .env dosyasına anahtarınızı ekleyin "
+            "(bkz. .env.example). --ai kullanmak için gereklidir."
         )
     return key
 

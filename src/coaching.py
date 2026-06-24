@@ -185,8 +185,8 @@ def generate_coaching_draft(
             {
                 "title": "AI Koçluk Notu",
                 "body": (
-                    "_Bu bölüm kural tabanlı taslaktır. Claude API entegrasyonu "
-                    "aktifleştirildiğinde kişiselleştirilmiş yorum buraya eklenecek._"
+                    "_Bu bölüm kural tabanlı taslaktır. `--ai` ile Gemini entegrasyonu "
+                    "aktifleştirildiğinde kişiselleştirilmiş yorum ayrı bölümde yer alır._"
                 ),
             },
         ],

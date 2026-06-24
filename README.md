@@ -37,22 +37,31 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
 ```
 FACEIT_API_KEY=your_faceit_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
-Uygulama anahtarı yalnızca bu dosyadan okur.
+Uygulama anahtarları yalnızca bu dosyadan okur.
+
+### Gemini API key
+
+1. [Google AI Studio](https://aistudio.google.com/apikey) üzerinden API key oluşturun.
+2. `.env` dosyasına `GEMINI_API_KEY=...` ekleyin.
+3. AI yorumu için `--ai` flag'i kullanın.
 
 ### API key güvenliği
 
-- API anahtarı **asla** kaynak koda yazılmaz.
+- FACEIT ve Gemini API anahtarları **asla** kaynak koda yazılmaz.
 - `.env` dosyası `.gitignore` içindedir ve commit edilmez.
-- Ham API yanıtları ve raporlar da git dışındadır (`data/` altı).
+- Ham API yanıtları ve raporlar da git dışındır (`data/` altı).
 - Terminal çıktısında veya raporlarda gerçek API key gösterilmez.
+- Gemini'ye yalnızca `data/processed/{nickname}_summary.json` içindeki temiz özet gönderilir; ham FACEIT JSON gönderilmez.
 
 ## Kullanım
 
 ```powershell
 python -m src.main --nickname Jurses --matches 5
 python -m src.main --nickname Jurses --matches 20
+python -m src.main --nickname Jurses --matches 20 --ai
 ```
 
 ### Parametreler
@@ -61,6 +70,13 @@ python -m src.main --nickname Jurses --matches 20
 | --- | --- | --- |
 | `--nickname` | `-n` | FACEIT oyuncu nickname'i (zorunlu) |
 | `--matches` | `-m` | Analiz edilecek son maç sayısı (varsayılan: 20, max: 100) |
+| `--ai` | — | Gemini AI koçluk yorumu üret (`GEMINI_API_KEY` gerekir) |
+
+### AI maliyet / limit uyarısı
+
+- `--ai` her çalıştırmada Gemini API çağrısı yapar (model: `gemini-2.5-flash`).
+- Ücretsiz kotanızı aşmamak için `--ai`'yi gerektiğinde kullanın.
+- Rate limit veya kota hatasında uygulama çökmez; raporda *"Gemini AI yorumu alınamadı"* yazar.
 
 ### Örnek CLI çıktısı
 
@@ -141,6 +157,8 @@ faceit-cs2-coach/
 │   ├── metrics.py
 │   ├── coaching.py
 │   ├── storage.py       # SQLite hafıza
+│   ├── ai_prompt.py     # Gemini prompt üretimi
+│   ├── gemini_client.py # Gemini API istemcisi
 │   ├── report_writer.py
 │   └── main.py
 └── data/                # git dışı (runtime çıktıları)
@@ -158,4 +176,3 @@ faceit-cs2-coach/
 ## Bu sprint kapsamı dışında
 
 - Web uygulaması, demo parsing, ödeme/üyelik
-- Claude API çağrısı (koçluk taslağı formatı hazır)

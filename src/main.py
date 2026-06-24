@@ -19,6 +19,7 @@ from src.config import (
     get_api_key,
 )
 from src.faceit_client import FaceitClient
+from src.gemini_client import generate_coaching_comment
 from src.metrics import (
     collect_missing_fields,
     compute_data_confidence,
@@ -49,6 +50,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=DEFAULT_MATCH_COUNT,
         help=f"Analiz edilecek son maç sayısı (varsayılan: {DEFAULT_MATCH_COUNT})",
+    )
+    parser.add_argument(
+        "--ai",
+        action="store_true",
+        help="Gemini AI koçluk yorumu üret (GEMINI_API_KEY gerekir)",
     )
     return parser.parse_args(argv)
 
@@ -113,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
     console.print("[bold cyan]FACEIT CS2 Koçluk[/bold cyan]")
     console.print(f"Oyuncu: [bold green]{nickname}[/bold green]")
     console.print(f"Analiz: son [yellow]{match_count}[/yellow] maç")
+    if args.ai:
+        console.print("Gemini AI: [green]açık[/green]")
     console.print()
 
     known_before = get_known_match_ids(nickname)
@@ -170,6 +178,11 @@ def main(argv: list[str] | None = None) -> int:
         encoding="utf-8",
     )
 
+    ai_comment: str | None = None
+    if args.ai:
+        console.print("[dim]Gemini AI koçluk yorumu üretiliyor...[/dim]")
+        ai_comment = generate_coaching_comment(processed_payload)
+
     report_md = write_markdown_report(
         normalized,
         summary,
@@ -179,6 +192,8 @@ def main(argv: list[str] | None = None) -> int:
         coaching=coaching,
         memory=memory,
         confidence=confidence,
+        ai_enabled=args.ai,
+        ai_comment=ai_comment,
     )
     report_path.write_text(report_md, encoding="utf-8")
 
