@@ -5,21 +5,10 @@ from typing import Any
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from src.config import GAME_ID, MISSING_DATA_LABEL
+from src.config import MISSING_DATA_LABEL
 from src.faceit_client import FaceitAPIError, FaceitClient
 
 console = Console()
-
-
-def _safe_get(data: dict[str, Any] | None, *keys: str, default: Any = None) -> Any:
-    current: Any = data
-    for key in keys:
-        if not isinstance(current, dict):
-            return default
-        current = current.get(key)
-        if current is None:
-            return default
-    return current
 
 
 def _stats_has_data(stats: dict[str, Any] | None) -> bool:
@@ -32,12 +21,10 @@ def _stats_has_data(stats: dict[str, Any] | None) -> bool:
 def collect_player_data(
     client: FaceitClient,
     nickname: str,
-    match_count: int = 20,
+    match_count: int = 120,
+    days: int = 90,
 ) -> dict[str, Any]:
-    """
-    Oyuncu profili, maç geçmişi ve her maç için istatistikleri toplar.
-    Eksik verilerde uygulama çökmez; ilgili alanlar işaretlenir.
-    """
+    """Oyuncu profili, pencereli maç geçmişi ve maç istatistiklerini toplar."""
     result: dict[str, Any] = {
         "nickname": nickname,
         "player": None,
@@ -47,6 +34,7 @@ def collect_player_data(
         "errors": [],
         "matches_fetched": 0,
         "stats_success_count": 0,
+        "analysis_window": {"days": days, "requested_matches": match_count},
     }
 
     try:
@@ -54,9 +42,8 @@ def collect_player_data(
         result["player"] = player
         result["player_id"] = player.get("player_id")
     except FaceitAPIError as exc:
-        msg = exc.user_message or str(exc)
-        result["errors"].append(msg)
-        console.print(f"[red]{msg}[/red]")
+        result["errors"].append(exc.user_message or str(exc))
+        console.print(f"[red]{exc.user_message or exc}[/red]")
         return result
     except Exception as exc:
         result["errors"].append(f"Oyuncu profili beklenmeyen hata: {exc}")
@@ -68,21 +55,20 @@ def collect_player_data(
         return result
 
     try:
-        history = client.get_player_history(
+        items = client.fetch_history_window(
             player_id,
             nickname,
-            game=GAME_ID,
-            limit=match_count,
+            max_matches=match_count,
+            days=days,
         )
-        result["history"] = history
+        result["history"] = {"items": items}
     except FaceitAPIError as exc:
-        msg = exc.user_message or str(exc)
-        result["errors"].append(msg)
-        console.print(f"[yellow]{msg}[/yellow]")
+        result["errors"].append(exc.user_message or str(exc))
+        console.print(f"[yellow]{exc.user_message or exc}[/yellow]")
         return result
 
-    items = _safe_get(history, "items", default=[]) or []
     result["matches_fetched"] = len(items)
+    result["analysis_window"]["analyzed_matches"] = len(items)
 
     if not items:
         result["errors"].append("Maç geçmişi boş veya veri eksik.")

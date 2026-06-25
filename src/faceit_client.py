@@ -102,16 +102,65 @@ class FaceitClient:
         nickname: str,
         *,
         game: str = "cs2",
-        limit: int = 20,
+        limit: int = 100,
         offset: int = 0,
+        from_ts: int | None = None,
+        to_ts: int | None = None,
     ) -> dict[str, Any]:
-        cache_path = RAW_DIR / f"{nickname.lower()}_history.json"
-        data = self._get(
-            f"/players/{player_id}/history",
-            params={"game": game, "limit": limit, "offset": offset},
-        )
+        cache_suffix = f"{nickname.lower()}_history_{offset}_{limit}.json"
+        cache_path = RAW_DIR / cache_suffix
+        params: dict[str, Any] = {"game": game, "limit": limit, "offset": offset}
+        if from_ts is not None:
+            params["from"] = from_ts
+        if to_ts is not None:
+            params["to"] = to_ts
+        data = self._get(f"/players/{player_id}/history", params=params)
         self._write_cache(cache_path, data)
         return data
+
+    def fetch_history_window(
+        self,
+        player_id: str,
+        nickname: str,
+        *,
+        max_matches: int,
+        days: int,
+        game: str = "cs2",
+    ) -> list[dict[str, Any]]:
+        """Belirtilen gün penceresi ve maç limiti içinde geçmişi sayfalar."""
+        from datetime import datetime, timedelta, timezone
+
+        from_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+        collected: list[dict[str, Any]] = []
+        offset = 0
+        page_size = min(100, max_matches)
+
+        while len(collected) < max_matches:
+            page = self.get_player_history(
+                player_id,
+                nickname,
+                game=game,
+                limit=page_size,
+                offset=offset,
+                from_ts=from_ts,
+            )
+            items = page.get("items") or []
+            if not items:
+                break
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                finished = item.get("finished_at")
+                if finished is not None and int(finished) < from_ts:
+                    continue
+                collected.append(item)
+                if len(collected) >= max_matches:
+                    break
+            if len(items) < page_size:
+                break
+            offset += page_size
+
+        return collected
 
     def get_match_stats(self, match_id: str) -> dict[str, Any]:
         cache_path = MATCHES_RAW_DIR / f"{match_id}_stats.json"

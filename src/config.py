@@ -13,17 +13,21 @@ REPORTS_DIR = DATA_DIR / "reports"
 DB_DIR = DATA_DIR / "db"
 DB_PATH = DB_DIR / "coach.sqlite"
 MATCHES_RAW_DIR = RAW_DIR / "matches"
+AI_EXPORTS_DIR = DATA_DIR / "ai_exports"
+DEMOS_DIR = DATA_DIR / "demos"
 
 FACEIT_BASE_URL = "https://open.faceit.com/data/v4"
 GAME_ID = "cs2"
-DEFAULT_MATCH_COUNT = 20
+DEFAULT_MATCH_COUNT = 120
+DEFAULT_DAYS = 90
+MAX_MATCH_COUNT = 200
+SHORT_FORM_MATCH_COUNT = 5
 
 MISSING_DATA_LABEL = "veri eksik"
 GEMINI_DEFAULT_MODEL = "gemini-2.5-flash"
 
 
 def load_config() -> None:
-    """Load environment variables from .env at project root."""
     load_dotenv(PROJECT_ROOT / ".env")
 
 
@@ -50,5 +54,13 @@ def get_gemini_api_key() -> str:
 
 
 def ensure_data_dirs() -> None:
-    for directory in (RAW_DIR, PROCESSED_DIR, REPORTS_DIR, MATCHES_RAW_DIR, DB_DIR):
+    for directory in (
+        RAW_DIR,
+        PROCESSED_DIR,
+        REPORTS_DIR,
+        MATCHES_RAW_DIR,
+        DB_DIR,
+        AI_EXPORTS_DIR,
+        DEMOS_DIR,
+    ):
         directory.mkdir(parents=True, exist_ok=True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
@@ -76,6 +77,20 @@ def init_db() -> None:
             );
             """
         )
+        _migrate_schema(conn)
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(analyses)")}
+    for name, col_type in (
+        ("days", "INTEGER"),
+        ("requested_matches", "INTEGER"),
+        ("analyzed_matches", "INTEGER"),
+        ("match_ids_json", "TEXT"),
+        ("period_metrics_json", "TEXT"),
+    ):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE analyses ADD COLUMN {name} {col_type}")
 
 
 def upsert_player(nickname: str, player_id: str | None) -> None:
@@ -221,6 +236,11 @@ def save_analysis(
     summary: dict[str, Any],
     map_stats: dict[str, Any],
     report_path: str,
+    days: int = 90,
+    requested_matches: int = 120,
+    analyzed_matches: int = 0,
+    match_ids: list[str] | None = None,
+    period_metrics: dict[str, Any] | None = None,
 ) -> int:
     def _num(val: Any) -> float | None:
         if val is None or val == MISSING_DATA_LABEL:
@@ -235,8 +255,9 @@ def save_analysis(
             """
             INSERT INTO analyses (
                 nickname, created_at, total_matches, new_matches_count,
-                win_rate, kd, adr, hs_percent, kast, best_map, worst_map, report_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                win_rate, kd, adr, hs_percent, kast, best_map, worst_map, report_path,
+                days, requested_matches, analyzed_matches, match_ids_json, period_metrics_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 nickname.lower(),
@@ -251,6 +272,11 @@ def save_analysis(
                 map_stats.get("best_map"),
                 map_stats.get("worst_map"),
                 report_path,
+                days,
+                requested_matches,
+                analyzed_matches or total_matches,
+                json.dumps(match_ids or []),
+                json.dumps(period_metrics or {}),
             ),
         )
         return int(cursor.lastrowid)
@@ -419,6 +445,14 @@ def build_memory_context(
     unchanged_problems: list[str] = []
 
     if previous:
+        prev_period: dict[str, Any] = {}
+        raw_period = previous.get("period_metrics_json")
+        if raw_period:
+            try:
+                prev_period = json.loads(raw_period)
+            except json.JSONDecodeError:
+                prev_period = {}
+
         comparisons = [
             ("Kazanma oranı", "win_rate_pct", "win_rate", True, 3.0),
             ("K/D", "avg_kd_ratio", "kd", True, 0.05),
@@ -426,7 +460,7 @@ def build_memory_context(
             ("Headshot %", "avg_headshot_pct", "hs_percent", True, 2.0),
             ("KAST", "avg_kast", "kast", True, 2.0),
         ]
-        for label, curr_key, prev_key, _higher_better, threshold in comparisons:
+        for label, curr_key, prev_key, _hb, threshold in comparisons:
             try:
                 curr = summary.get(curr_key)
                 prev = previous.get(prev_key)
@@ -446,6 +480,22 @@ def build_memory_context(
                     worsened.append(f"{label}: {p} → {c}")
             except (TypeError, ValueError):
                 continue
+
+        if prev_period:
+            prev_last = prev_period.get("last_30_days", {}).get("summary", {})
+            curr_last_wr = summary.get("win_rate_pct")
+            try:
+                if prev_last and curr_last_wr not in (None, MISSING_DATA_LABEL):
+                    plwr = prev_last.get("win_rate_pct")
+                    if plwr not in (None, MISSING_DATA_LABEL):
+                        diff = float(curr_last_wr) - float(plwr)
+                        if abs(diff) >= 5:
+                            tag = "yükseldi" if diff > 0 else "düştü"
+                            improved.append(
+                                f"Son 30 gün kazanma oranı önceki analize göre {tag}."
+                            )
+            except (TypeError, ValueError):
+                pass
 
         if not improved:
             improved.append("Belirgin iyileşme tespit edilmedi.")
@@ -497,6 +547,10 @@ def persist_analysis_run(
     coaching: dict[str, Any],
     report_path: str,
     known_before: set[str],
+    *,
+    days: int = 90,
+    requested_matches: int = 120,
+    period_metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Maçları kaydeder, analiz ve önerileri persist eder."""
     previous = get_last_analysis(nickname)
@@ -551,6 +605,11 @@ def persist_analysis_run(
         summary=summary,
         map_stats=map_stats,
         report_path=report_path,
+        days=days,
+        requested_matches=requested_matches,
+        analyzed_matches=len(fetched_ids),
+        match_ids=fetched_ids,
+        period_metrics=period_metrics,
     )
 
     if rec_items:

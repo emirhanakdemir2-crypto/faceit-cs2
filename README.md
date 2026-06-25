@@ -1,178 +1,100 @@
-# FACEIT CS2 AI Koçluk Aracı (CLI MVP)
+# FACEIT CS2 AI Koçluk Aracı
 
-FACEIT Data API v4 üzerinden CS2 oyuncu profili, maç geçmişi ve maç istatistiklerini çeken; veriyi normalize edip performans özeti, hafızalı karşılaştırma ve Markdown rapor üreten Python CLI aracı.
+FACEIT Data API v4 + SQLite hafıza + opsiyonel Gemini AI + demo mekanik analiz iskeleti.
 
-## Gereksinimler
+## Ana hedef
 
-- Python 3.11+
-- FACEIT Developer Portal'dan alınmış **Server-side** API anahtarı
+**90 gün / 120 maç** dönemsel gelişim analizi. Son 5 maç yalnızca **kısa vadeli form** göstergesidir; ana koçluk kararı dönem özetine dayanır.
 
-## Kurulum — Windows (PowerShell)
+Counter-strafe ve spray metrikleri FACEIT API'den **alınamaz** — `.dem` demo dosyası gerekir. Demo indirme API'si bu fazda yok; manuel `data/demos/` klasörü desteklenir.
+
+## Kurulum (PowerShell)
 
 ```powershell
-# Proje klasörüne git
 cd C:\path\to\faceit-cs2-coach
-
-# Sanal ortam oluştur ve etkinleştir
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-
-# Bağımlılıkları yükle
 pip install -r requirements.txt
-
-# Ortam dosyasını oluştur
 Copy-Item .env.example .env
 notepad .env
 ```
 
-`Activate.ps1` engellenirse:
-
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-```
-
-### `.env` kullanımı
-
-`.env.example` dosyasını `.env` olarak kopyalayın ve yalnızca kendi anahtarınızı girin:
-
+`.env`:
 ```
 FACEIT_API_KEY=your_faceit_api_key_here
 GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
-Uygulama anahtarları yalnızca bu dosyadan okur.
-
-### Gemini API key
-
-1. [Google AI Studio](https://aistudio.google.com/apikey) üzerinden API key oluşturun.
-2. `.env` dosyasına `GEMINI_API_KEY=...` ekleyin.
-3. AI yorumu için `--ai` flag'i kullanın.
-
-### API key güvenliği
-
-- FACEIT ve Gemini API anahtarları **asla** kaynak koda yazılmaz.
-- `.env` dosyası `.gitignore` içindedir ve commit edilmez.
-- Ham API yanıtları ve raporlar da git dışındır (`data/` altı).
-- Terminal çıktısında veya raporlarda gerçek API key gösterilmez.
-- Gemini'ye yalnızca `data/processed/{nickname}_summary.json` içindeki temiz özet gönderilir; ham FACEIT JSON gönderilmez.
-
 ## Kullanım
 
 ```powershell
-python -m src.main --nickname Jurses --matches 5
-python -m src.main --nickname Jurses --matches 20
-python -m src.main --nickname Jurses --matches 20 --ai
+# Varsayılan: 90 gün / 120 maç
+python -m src.main --nickname Jurses
+
+python -m src.main --nickname Jurses --days 90 --matches 120
+python -m src.main --nickname Jurses --days 90 --matches 120 --export-ai-prompt
+python -m src.main --nickname Jurses --demo-folder data/demos
+python -m src.main --nickname Jurses --ai
 ```
 
-### Parametreler
-
-| Parametre | Kısa | Açıklama |
+| Parametre | Varsayılan | Açıklama |
 | --- | --- | --- |
-| `--nickname` | `-n` | FACEIT oyuncu nickname'i (zorunlu) |
-| `--matches` | `-m` | Analiz edilecek son maç sayısı (varsayılan: 20, max: 100) |
-| `--ai` | — | Gemini AI koçluk yorumu üret (`GEMINI_API_KEY` gerekir) |
+| `--days` | 90 | Analiz penceresi (gün) |
+| `--matches` | 120 | Maks. maç sayısı |
+| `--export-ai-prompt` | kapalı | `data/ai_exports/` belgesi |
+| `--demo-folder` | `data/demos` | Manuel demo klasörü |
+| `--ai` | kapalı | Gemini API yorumu |
 
-### AI maliyet / limit uyarısı
+## Rapor yapısı
 
-- `--ai` her çalıştırmada Gemini API çağrısı yapar (model: `gemini-2.5-flash`).
-- Ücretsiz kotanızı aşmamak için `--ai`'yi gerektiğinde kullanın.
-- Rate limit veya kota hatasında uygulama çökmez; raporda *"Gemini AI yorumu alınamadı"* yazar.
+1. Oyuncu profili
+2. Veri güveni
+3. 90 günlük genel özet
+4. İlk 30 / orta 30 / son 30 gün kıyaslaması
+5. Önceki analizden bu yana gelişim/gerileme
+6. Harita havuzu analizi
+7. Kısa vadeli son 5 maç formu
+8. Kalıcı problemler
+9. 7 günlük odak planı
+10. Demo mekanik analizi + hedef metrikler
+11. AI export referansı
+12. Gemini AI yorumu (`--ai`)
 
-### Örnek CLI çıktısı
+## API'siz AI export
 
-```
-FACEIT CS2 Koçluk
-Oyuncu: Jurses
-Analiz: son 20 maç
+`--export-ai-prompt` → `data/ai_exports/{nickname}_ai_prompt_latest.md`
 
-╭──────────── Tamamlandı ────────────╮
-│  Oyuncu              Jurses        │
-│  Çekilen maç         20            │
-│  Stats başarılı      20 / 20       │
-│  Toplam kayıtlı maç  20           │
-│  Yeni maç            0             │
-│  Önceki analiz       2026-06-24... │
-│  Rapor dosyası       ...\jurses_latest.md │
-╰────────────────────────────────────╯
-```
+Ham FACEIT JSON yok; temiz metrikler ChatGPT/Gemini/Claude'a yapıştırılabilir.
 
-## Hafızalı koçluk sistemi
+## Demo klasörü
 
-SQLite veritabanı (`data/db/coach.sqlite`) her çalıştırmada:
+1. FACEIT'ten demo dosyalarını manuel indirin
+2. `data/demos/` içine koyun (`.dem`, `.dem.gz`, `.dem.zst`)
+3. `--demo-folder data/demos` ile tarayın
 
-1. FACEIT'ten son N maçı çeker.
-2. `match_id` listesini veritabanındaki kayıtlarla karşılaştırır.
-3. Yalnızca **yeni** maçları `new_matches` olarak işaretler.
-4. Analiz geçmişini ve önerileri saklar.
-5. Rapor üretir:
-   - **Hafıza Durumu** — toplam kayıtlı maç, yeni maç sayısı
-   - Önceki analize göre gelişen / kötüleşen alanlar
-   - Değişmeyen problemler ve önceki önerilerin durumu
-   - 7 günlük odak planı
+`demoparser2` kurulu değilse normal analiz çalışır; raporda kurulum notu görünür.
 
-İlk çalıştırma: *"İlk analiz oluşturuldu. Bu rapor bundan sonraki analizler için baseline olacak."*
-
-Yeni maç yoksa: *"Son analizden sonra yeni maç bulunamadı."*
-
-## Rapor nerede oluşur?
-
-| Dosya | Açıklama |
-| --- | --- |
-| `data/reports/{nickname}_latest.md` | Markdown performans raporu |
-| `data/processed/{nickname}_summary.json` | JSON özet |
-| `data/db/coach.sqlite` | Hafıza veritabanı |
-| `data/raw/` | Ham API cache (git dışı) |
-
-## `data/` klasörü neden git'e eklenmez?
-
-- Ham API yanıtları kişisel oyun verisi içerir.
-- Raporlar ve SQLite hafızası ortam/oyuncuya özeldir.
-- API anahtarı `.env` ile birlikte repoda tutulmamalıdır.
-
-`.gitignore` kayıtları:
+## Güvenlik
 
 ```
 .env
-.venv/
-__pycache__/
-*.pyc
 data/raw/
 data/processed/
 data/reports/
 data/db/
+data/ai_exports/
+data/demos/
 ```
+
+API anahtarları koda veya rapora yazılmaz.
 
 ## Proje yapısı
 
 ```
-faceit-cs2-coach/
-├── .env.example
-├── requirements.txt
-├── src/
-│   ├── config.py
-│   ├── errors.py
-│   ├── faceit_client.py
-│   ├── collector.py
-│   ├── normalizer.py
-│   ├── metrics.py
-│   ├── coaching.py
-│   ├── storage.py       # SQLite hafıza
-│   ├── ai_prompt.py     # Gemini prompt üretimi
-│   ├── gemini_client.py # Gemini API istemcisi
-│   ├── report_writer.py
-│   └── main.py
-└── data/                # git dışı (runtime çıktıları)
+src/
+  period_analysis.py   # 30 günlük dilim kıyası
+  demo_analyzer.py     # Demo tarama + mekanik iskelet
+  ai_export.py         # AI export belgesi
+  storage.py           # SQLite hafıza (dönemsel)
+  ...
 ```
-
-## Hata mesajları
-
-| HTTP | Mesaj |
-| --- | --- |
-| 401 | API key hatalı veya .env okunmuyor |
-| 403 | Yetki/key tipi sorunu |
-| 404 | Oyuncu bulunamadı veya oyun verisi yok |
-| 429 | Rate limit |
-
-## Bu sprint kapsamı dışında
-
-- Web uygulaması, demo parsing, ödeme/üyelik

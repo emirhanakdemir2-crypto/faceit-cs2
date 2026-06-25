@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from src.config import MISSING_DATA_LABEL
@@ -19,118 +20,24 @@ def _result_label(won: bool | None) -> str:
     return "?"
 
 
-def _render_gemini_section(*, ai_enabled: bool, ai_comment: str | None) -> list[str]:
-    lines = [
-        "## Gemini AI Koçluk Yorumu",
-        "",
-    ]
-    if not ai_enabled:
-        lines.append(
-            "_AI yorumu kapalı. Açmak için `--ai` parametresiyle çalıştırın._"
-        )
-        lines.append("")
-        return lines
-
-    if ai_comment:
-        lines.append(ai_comment)
-    else:
-        lines.append(GEMINI_UNAVAILABLE_LABEL)
-    lines.append("")
-    return lines
-
-
 GEMINI_UNAVAILABLE_LABEL = "Gemini AI yorumu alınamadı"
 
 
-def _render_coaching_section(coaching: dict[str, Any]) -> list[str]:
-    lines = [
-        "## Koçluk Yorum Taslağı (Level 5–9)",
-        "",
-        f"**{_fmt(coaching.get('headline'))}**",
-        "",
+def _summary_table(summary: dict[str, Any], title: str) -> list[str]:
+    lines = [f"### {title}", "", "| Metrik | Değer |", "| --- | --- |"]
+    rows = [
+        ("Maç sayısı", summary.get("total_matches")),
+        ("İstatistikli maç", summary.get("matches_with_stats")),
+        ("Galibiyet", summary.get("wins")),
+        ("Mağlubiyet", summary.get("losses")),
+        ("Kazanma %", summary.get("win_rate_pct")),
+        ("Ort. K/D", summary.get("avg_kd_ratio")),
+        ("Ort. ADR", summary.get("avg_adr")),
+        ("Ort. HS%", summary.get("avg_headshot_pct")),
+        ("Ort. KAST", summary.get("avg_kast")),
     ]
-
-    for section in coaching.get("sections") or []:
-        title = section.get("title", "")
-        lines.append(f"### {title}")
-        lines.append("")
-        if "body" in section:
-            lines.append(section["body"])
-            lines.append("")
-        for item in section.get("items") or []:
-            lines.append(f"- {item}")
-        if section.get("items"):
-            lines.append("")
-
-    return lines
-
-
-def _render_memory_section(memory: dict[str, Any]) -> list[str]:
-    lines = [
-        "## Hafıza Durumu",
-        "",
-        f"**{_fmt(memory.get('status_message'))}**",
-        "",
-        "| Alan | Değer |",
-        "| --- | --- |",
-        f"| Toplam kayıtlı maç | {_fmt(memory.get('stored_matches_total'))} |",
-        f"| Son analizden sonra yeni maç | {_fmt(memory.get('new_matches_count'))} |",
-        f"| Önceki analiz tarihi | {_fmt(memory.get('previous_analysis_date'))} |",
-        "",
-        "### Önceki Analize Göre Gelişen Alanlar",
-        "",
-    ]
-    for item in memory.get("improved_areas") or []:
-        lines.append(f"- {item}")
-    if not memory.get("improved_areas"):
-        lines.append(f"- {MISSING_DATA_LABEL}")
-
-    lines.extend(["", "### Önceki Analize Göre Kötüleşen Alanlar", ""])
-    for item in memory.get("worsened_areas") or []:
-        lines.append(f"- {item}")
-    if not memory.get("worsened_areas"):
-        lines.append(f"- {MISSING_DATA_LABEL}")
-
-    lines.extend(["", "### Değişmeyen Problemler", ""])
-    for item in memory.get("unchanged_problems") or []:
-        lines.append(f"- {item}")
-    if not memory.get("unchanged_problems"):
-        lines.append("- Belirgin sabit problem tespit edilmedi.")
-
-    lines.extend(["", "### Önceki Önerilerin Durumu", ""])
-    recs = memory.get("recommendation_status") or []
-    if recs:
-        for rec in recs:
-            lines.append(
-                f"- [{_fmt(rec.get('status'))}] {_fmt(rec.get('problem_area'))}: "
-                f"{_fmt(rec.get('recommendation'))}"
-            )
-    else:
-        lines.append("- Önceki analiz veya açık öneri bulunamadı.")
-
-    lines.extend(["", "### Yeni 7 Günlük Odak Planı", ""])
-    lines.append("| Gün | Odak |")
-    lines.append("| --- | --- |")
-    for day in memory.get("focus_plan_7d") or []:
-        lines.append(f"| {_fmt(day.get('day'))} | {_fmt(day.get('focus'))} |")
-
-    lines.append("")
-    return lines
-
-
-def _render_data_confidence(confidence: dict[str, Any]) -> list[str]:
-    lines = [
-        "## Veri Güveni",
-        "",
-        f"**Seviye: {_fmt(confidence.get('level'))}**",
-        "",
-        _fmt(confidence.get("detail")),
-        "",
-        "**Notlar:**",
-        "",
-    ]
-    for note in confidence.get("notes") or []:
-        lines.append(f"- {note}")
+    for label, val in rows:
+        lines.append(f"| {label} | {_fmt(val)} |")
     lines.append("")
     return lines
 
@@ -145,197 +52,228 @@ def write_markdown_report(
     coaching: dict[str, Any] | None = None,
     memory: dict[str, Any] | None = None,
     confidence: dict[str, Any] | None = None,
+    period_comparison: dict[str, Any] | None = None,
+    period_insights: list[str] | None = None,
+    persistent_problems: list[str] | None = None,
+    new_matches_baseline: dict[str, Any] | None = None,
+    demo_analysis: dict[str, Any] | None = None,
     ai_enabled: bool = False,
     ai_comment: str | None = None,
+    ai_export_path: str | None = None,
 ) -> str:
-    """Normalize edilmiş veri ve özetten Markdown rapor metni üretir."""
     profile = normalized.get("profile") or {}
     matches = normalized.get("matches") or []
     nickname = normalized.get("nickname") or profile.get("nickname") or "oyuncu"
     errors = normalized.get("collection_errors") or []
+    window = normalized.get("analysis_window") or {}
+    days = window.get("days", 90)
+
     form = form or {}
-    map_stats = map_stats or {
-        "maps": [],
-        "best_map": MISSING_DATA_LABEL,
-        "worst_map": MISSING_DATA_LABEL,
-        "map_verdict_note": MISSING_DATA_LABEL,
-    }
-    missing_fields = missing_fields or []
-    coaching = coaching or {}
+    map_stats = map_stats or {"maps": [], "best_map": MISSING_DATA_LABEL, "worst_map": MISSING_DATA_LABEL}
     memory = memory or {}
     confidence = confidence or {}
+    period_comparison = period_comparison or {}
+    period_insights = period_insights or []
+    persistent_problems = persistent_problems or []
+    new_matches_baseline = new_matches_baseline or {}
+    demo_analysis = demo_analysis or {}
+    missing_fields = missing_fields or []
 
     lines: list[str] = [
-        f"# FACEIT CS2 Performans Raporu — {_fmt(nickname)}",
+        f"# FACEIT CS2 Gelişim Raporu — {_fmt(nickname)}",
         "",
         f"*Oluşturulma: {normalized.get('generated_at', MISSING_DATA_LABEL)}*",
+        f"*Analiz penceresi: son {days} gün / {summary.get('total_matches', len(matches))} maç*",
+        "",
+        "## Oyuncu Profili",
+        "",
+        "| Alan | Değer |",
+        "| --- | --- |",
+        f"| Nickname | {_fmt(profile.get('nickname'))} |",
+        f"| Player ID | {_fmt(profile.get('player_id'))} |",
+        f"| CS2 Skill Level | {_fmt(profile.get('skill_level'))} |",
+        f"| FACEIT ELO | {_fmt(profile.get('faceit_elo'))} |",
+        f"| Profil | {_fmt(profile.get('faceit_url'))} |",
+        "",
+        "## Veri Güveni",
+        "",
+        f"**Seviye: {_fmt(confidence.get('level'))}** — {_fmt(confidence.get('detail'))}",
         "",
     ]
+    for note in confidence.get("notes") or []:
+        lines.append(f"- {note}")
+    lines.append("")
 
-    if memory:
-        lines.extend(_render_memory_section(memory))
+    lines.extend(_summary_table(summary, f"{days} Günlük Genel Özet"))
 
-    lines.extend(
-        [
-            "## Oyuncu Profili",
-            "",
-            "| Alan | Değer |",
-            "| --- | --- |",
-            f"| Nickname | {_fmt(profile.get('nickname'))} |",
-            f"| Player ID | {_fmt(profile.get('player_id'))} |",
-            f"| Ülke | {_fmt(profile.get('country'))} |",
-            f"| CS2 Skill Level | {_fmt(profile.get('skill_level'))} |",
-            f"| FACEIT ELO | {_fmt(profile.get('faceit_elo'))} |",
-            f"| Steam / Oyun adı | {_fmt(profile.get('game_player_name'))} |",
-            f"| Profil | {_fmt(profile.get('faceit_url'))} |",
-            "",
-        ]
-    )
+    lines.extend(["## Dönem Kıyaslaması (İlk 30 / Orta 30 / Son 30 Gün)", ""])
+    for key in ("first_30_days", "middle_30_days", "last_30_days"):
+        block = period_comparison.get(key) or {}
+        lines.extend(_summary_table(block.get("summary", {}), block.get("label", key)))
+    if period_insights:
+        lines.append("**Dönem trendleri:**")
+        lines.append("")
+        for ins in period_insights:
+            lines.append(f"- {ins}")
+        lines.append("")
 
-    if confidence:
-        lines.extend(_render_data_confidence(confidence))
+    lines.extend(["## Önceki Analizden Bu Yana Gelişim / Gerileme", ""])
+    lines.append(f"**{_fmt(memory.get('status_message'))}**")
+    lines.append("")
+    if new_matches_baseline.get("has_new"):
+        lines.append(f"_{_fmt(new_matches_baseline.get('message'))}_")
+        lines.append("")
+        for ins in new_matches_baseline.get("insights") or []:
+            lines.append(f"- {ins}")
+        lines.append("")
+    lines.append("### Gelişen Alanlar")
+    lines.append("")
+    for item in memory.get("improved_areas") or ["—"]:
+        lines.append(f"- {item}")
+    lines.append("")
+    lines.append("### Kötüleşen Alanlar")
+    lines.append("")
+    for item in memory.get("worsened_areas") or ["—"]:
+        lines.append(f"- {item}")
+    lines.append("")
 
-    lines.extend(
-        [
-            f"## Son {summary.get('total_matches', len(matches))} Maç — Performans Özeti",
-            "",
-            "| Metrik | Değer |",
-            "| --- | --- |",
-            f"| İstatistikli maç sayısı | {_fmt(summary.get('matches_with_stats'))} / {_fmt(summary.get('total_matches'))} |",
-            f"| Galibiyet | {_fmt(summary.get('wins'))} |",
-            f"| Mağlubiyet | {_fmt(summary.get('losses'))} |",
-            f"| Kazanma oranı (%) | {_fmt(summary.get('win_rate_pct'))} |",
-            f"| Ort. Kill | {_fmt(summary.get('avg_kills'))} |",
-            f"| Ort. Death | {_fmt(summary.get('avg_deaths'))} |",
-            f"| Ort. Assist | {_fmt(summary.get('avg_assists'))} |",
-            f"| Ort. K/D | {_fmt(summary.get('avg_kd_ratio'))} |",
-            f"| Ort. K/R | {_fmt(summary.get('avg_kr_ratio'))} |",
-            f"| Ort. ADR | {_fmt(summary.get('avg_adr'))} |",
-            f"| Ort. Headshot % | {_fmt(summary.get('avg_headshot_pct'))} |",
-            f"| Ort. KAST | {_fmt(summary.get('avg_kast'))} |",
-            f"| Toplam MVP | {_fmt(summary.get('total_mvps'))} |",
-            f"| Toplam 3K | {_fmt(summary.get('total_triple_kills'))} |",
-            f"| Toplam 4K | {_fmt(summary.get('total_quadro_kills'))} |",
-            f"| Toplam ACE (5K) | {_fmt(summary.get('total_penta_kills'))} |",
-            f"| En iyi K/D maçı | {_fmt(summary.get('best_kd_match_id'))} ({_fmt(summary.get('best_kd_value'))}) |",
-            f"| En düşük K/D maçı | {_fmt(summary.get('worst_kd_match_id'))} ({_fmt(summary.get('worst_kd_value'))}) |",
-            "",
-            "## Son 5 Maç Formu",
-            "",
-            "| Metrik | Değer |",
-            "| --- | --- |",
-            f"| Skor | {_fmt(form.get('record'))} |",
-            f"| Kazanma oranı (%) | {_fmt(form.get('win_rate_pct'))} |",
-            f"| Ort. K/D | {_fmt(form.get('avg_kd_ratio'))} |",
-            f"| Ort. ADR | {_fmt(form.get('avg_adr'))} |",
-            f"| Form dizisi (yeniden → eski) | {_fmt(form.get('streak'))} |",
-            f"| Streak yorumu | {_fmt(form.get('streak_comment'))} |",
-            f"| En iyi maç | {_fmt(form.get('best_match'))} |",
-            f"| En kötü maç | {_fmt(form.get('worst_match'))} |",
-            f"| En riskli harita | {_fmt(form.get('riskiest_map'))} |",
-            "",
-            "| # | Sonuç | Harita | K/D | ADR | Tarih |",
-            "| --- | --- | --- | --- | --- | --- |",
-        ]
-    )
-
-    for index, fm in enumerate(form.get("matches") or [], start=1):
-        lines.append(
-            f"| {index} | {_result_label(fm.get('won'))} | {_fmt(fm.get('map'))} | "
-            f"{_fmt(fm.get('kd_ratio'))} | {_fmt(fm.get('adr'))} | {_fmt(fm.get('finished_at'))} |"
-        )
-
-    if not form.get("matches"):
-        lines.append(f"| — | — | — | — | — | {MISSING_DATA_LABEL} |")
-
+    lines.extend(["## Harita Havuzu Analizi", ""])
     map_note = map_stats.get("map_verdict_note")
-    lines.extend(
-        [
-            "",
-            "## Harita Bazlı Performans",
-            "",
-        ]
-    )
     if map_note and map_note != MISSING_DATA_LABEL:
         lines.append(f"*{map_note}*")
         lines.append("")
     else:
-        lines.extend(
-            [
-                f"**En iyi harita:** {_fmt(map_stats.get('best_map'))}  ",
-                f"**En zayıf harita:** {_fmt(map_stats.get('worst_map'))}",
-                "",
-            ]
-        )
-
-    lines.extend(
-        [
-            "| Harita | Oynanan | Galibiyet | Mağlubiyet | Kazanma % |",
-            "| --- | --- | --- | --- | --- |",
-        ]
-    )
-
-    map_rows = map_stats.get("maps") or []
-    if map_rows:
-        for row in map_rows:
-            lines.append(
-                f"| {_fmt(row.get('map'))} | {_fmt(row.get('played'))} | "
-                f"{_fmt(row.get('wins'))} | {_fmt(row.get('losses'))} | "
-                f"{_fmt(row.get('win_rate_pct'))} |"
-            )
-    else:
-        lines.append(f"| {MISSING_DATA_LABEL} | — | — | — | — |")
-
-    lines.append("")
-    lines.extend(_render_coaching_section(coaching))
-    lines.extend(_render_gemini_section(ai_enabled=ai_enabled, ai_comment=ai_comment))
-
-    lines.extend(
-        [
-            "## Maç Detayları",
+        lines.extend([
+            f"**En iyi harita (min. 3 maç):** {_fmt(map_stats.get('best_map'))}  ",
+            f"**En zayıf harita:** {_fmt(map_stats.get('worst_map'))}",
             "",
-            "| Sonuç | Tarih | Harita | Rekabet | K | D | A | K/D | ADR | HS% | MVP |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-        ]
-    )
+        ])
+    lines.extend([
+        "| Harita | Oynanan | G | M | Kazanma % |",
+        "| --- | --- | --- | --- | --- |",
+    ])
+    for row in map_stats.get("maps") or []:
+        lines.append(
+            f"| {_fmt(row.get('map'))} | {_fmt(row.get('played'))} | "
+            f"{_fmt(row.get('wins'))} | {_fmt(row.get('losses'))} | "
+            f"{_fmt(row.get('win_rate_pct'))} |"
+        )
+    lines.append("")
 
-    for match in matches:
-        if not match.get("stats_available"):
-            lines.append(
-                f"| {_result_label(match.get('won'))} | {_fmt(match.get('finished_at'))} | "
-                f"{_fmt(match.get('map'))} | {_fmt(match.get('competition_name'))} | "
-                f"{MISSING_DATA_LABEL} | {MISSING_DATA_LABEL} | {MISSING_DATA_LABEL} | "
-                f"{MISSING_DATA_LABEL} | {MISSING_DATA_LABEL} | {MISSING_DATA_LABEL} | {MISSING_DATA_LABEL} |"
-            )
-            continue
+    lines.extend([
+        "## Kısa Vadeli Form — Son 5 Maç",
+        "",
+        "_Ana koçluk kararı bu bölüme değil, 90 günlük dönem özetine dayanır._",
+        "",
+        f"| Skor | {_fmt(form.get('record'))} |",
+        f"| Ort. K/D | {_fmt(form.get('avg_kd_ratio'))} |",
+        f"| Ort. ADR | {_fmt(form.get('avg_adr'))} |",
+        f"| Streak | {_fmt(form.get('streak'))} |",
+        f"| Streak yorumu | {_fmt(form.get('streak_comment'))} |",
+        f"| En iyi maç | {_fmt(form.get('best_match'))} |",
+        f"| En kötü maç | {_fmt(form.get('worst_match'))} |",
+        f"| En riskli harita | {_fmt(form.get('riskiest_map'))} |",
+        "",
+    ])
 
+    lines.extend(["## Kalıcı Problemler", ""])
+    for p in persistent_problems:
+        lines.append(f"- {p}")
+    lines.append("")
+
+    lines.extend(["## 7 Günlük Odak Planı", ""])
+    lines.append("| Gün | Odak |")
+    lines.append("| --- | --- |")
+    for day in memory.get("focus_plan_7d") or []:
+        lines.append(f"| {_fmt(day.get('day'))} | {_fmt(day.get('focus'))} |")
+    lines.append("")
+
+    lines.extend(["## Demo Mekanik Analizi", ""])
+    if demo_analysis.get("found") is False:
+        lines.append(f"_{_fmt(demo_analysis.get('message'))}_")
+    else:
+        lines.append(f"_{_fmt(demo_analysis.get('message', 'Demo klasörü taranmadı.'))}_")
+        lines.append("")
+        if demo_analysis.get("files"):
+            lines.append("| Dosya | match_id | Boyut (MB) |")
+            lines.append("| --- | --- | --- |")
+            for f in demo_analysis.get("files") or []:
+                lines.append(
+                    f"| {_fmt(f.get('filename'))} | {_fmt(f.get('match_id'))} | {_fmt(f.get('size_mb'))} |"
+                )
+            lines.append("")
+        mech = demo_analysis.get("mechanics") or {}
+        if mech.get("note"):
+            lines.append(f"*{mech['note']}*")
+            lines.append("")
+
+    lines.extend(["## Mekanik Analiz Hedef Metrikleri", ""])
+    lines.append("_Counter-strafe ve spray FACEIT API'den alınamaz; demo gerekir._")
+    lines.append("")
+    lines.append("| Metrik | Değer | Kaynak |")
+    lines.append("| --- | --- | --- |")
+    mech = demo_analysis.get("mechanics") or {}
+    for tm in demo_analysis.get("target_metrics") or []:
+        key = tm.get("key", "")
+        val = mech.get(key, tm.get("value", MISSING_DATA_LABEL))
+        lines.append(f"| {tm.get('label')} | {_fmt(val)} | {tm.get('source')} |")
+    lines.append("")
+
+    lines.extend(["## AI Export Belgesi", ""])
+    if ai_export_path:
+        lines.append(f"AI export: `{ai_export_path}`")
+        lines.append("")
+        lines.append(
+            "_ChatGPT/Gemini/Claude'a yapıştırmak için `--export-ai-prompt` ile oluşturulur._"
+        )
+    else:
+        lines.append(
+            "_AI export oluşturulmadı. `--export-ai-prompt` parametresiyle çalıştırın._"
+        )
+    lines.append("")
+
+    lines.extend(["## Gemini AI Koçluk Yorumu", ""])
+    if not ai_enabled:
+        lines.append("_AI yorumu kapalı. Açmak için `--ai` parametresiyle çalıştırın._")
+    elif ai_comment:
+        lines.append(ai_comment)
+    else:
+        lines.append(GEMINI_UNAVAILABLE_LABEL)
+    lines.append("")
+
+    lines.extend([
+        "## Maç Detayları (özet)",
+        "",
+        "| Sonuç | Tarih | Harita | K/D | ADR |",
+        "| --- | --- | --- | --- | --- |",
+    ])
+    for match in matches[:30]:
         lines.append(
             f"| {_result_label(match.get('won'))} | {_fmt(match.get('finished_at'))} | "
-            f"{_fmt(match.get('map'))} | {_fmt(match.get('competition_name'))} | "
-            f"{_fmt(match.get('kills'))} | {_fmt(match.get('deaths'))} | {_fmt(match.get('assists'))} | "
-            f"{_fmt(match.get('kd_ratio'))} | {_fmt(match.get('adr'))} | "
-            f"{_fmt(match.get('headshot_pct'))} | {_fmt(match.get('mvps'))} |"
+            f"{_fmt(match.get('map'))} | {_fmt(match.get('kd_ratio'))} | {_fmt(match.get('adr'))} |"
         )
+    if len(matches) > 30:
+        lines.append(f"| ... | +{len(matches) - 30} maç daha | — | — | — |")
+    lines.append("")
 
     if missing_fields:
-        lines.extend(["", "## Veri Eksik Alanlar", ""])
-        for field in missing_fields:
+        lines.extend(["## Veri Eksik Alanlar", ""])
+        for field in missing_fields[:25]:
             lines.append(f"- {field}")
+        if len(missing_fields) > 25:
+            lines.append(f"- ... ve {len(missing_fields) - 25} alan daha")
+        lines.append("")
 
     if errors:
-        lines.extend(["", "## API / Toplama Uyarıları", ""])
-        for err in errors:
+        lines.extend(["## API Uyarıları", ""])
+        for err in errors[:15]:
             lines.append(f"- {err}")
+        lines.append("")
 
-    lines.extend(
-        [
-            "",
-            "---",
-            "",
-            "*Bu rapor FACEIT Data API v4 verileriyle otomatik üretilmiştir. "
-            "Eksik alanlar \"veri eksik\" olarak işaretlenmiştir.*",
-            "",
-        ]
-    )
-
+    lines.extend([
+        "---",
+        "",
+        "*FACEIT Data API v4 + hafızalı koçluk sistemi. Mekanik metrikler demo gerektirir.*",
+        "",
+    ])
     return "\n".join(lines)

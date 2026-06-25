@@ -183,6 +183,7 @@ def normalize_collected_data(raw: dict[str, Any]) -> dict[str, Any]:
             {
                 "match_id": entry.get("match_id") or MISSING_DATA_LABEL,
                 "finished_at": _ts_to_iso(history_item.get("finished_at")),
+                "finished_at_unix": history_item.get("finished_at"),
                 "started_at": _ts_to_iso(history_item.get("started_at")),
                 "map": map_name,
                 "game_mode": history_item.get("game_mode") or MISSING_DATA_LABEL,
@@ -250,6 +251,7 @@ def normalize_collected_data(raw: dict[str, Any]) -> dict[str, Any]:
         "nickname": nickname,
         "profile": profile,
         "match_count_requested": len(raw.get("matches") or []),
+        "analysis_window": raw.get("analysis_window") or {},
         "matches": normalized_matches,
         "collection_errors": raw.get("errors") or [],
     }

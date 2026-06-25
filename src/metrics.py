@@ -61,9 +61,14 @@ def _empty_summary() -> dict[str, Any]:
     }
 
 
-def compute_performance_summary(normalized: dict[str, Any]) -> dict[str, Any]:
-    """Son N maçlık performans özetini hesaplar."""
-    matches = normalized.get("matches") or []
+def compute_performance_summary(
+    normalized: dict[str, Any] | None = None,
+    *,
+    matches: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Dönem veya tam set için performans özetini hesaplar."""
+    if matches is None:
+        matches = (normalized or {}).get("matches") or []
     total = len(matches)
 
     if total == 0:
@@ -361,33 +366,152 @@ def collect_missing_fields(normalized: dict[str, Any]) -> list[str]:
 def compute_data_confidence(
     total_matches: int,
     missing_fields: list[str],
+    *,
+    days: int = 90,
 ) -> dict[str, Any]:
-    """Örneklem büyüklüğüne göre veri güven seviyesi."""
-    if total_matches >= 20:
+    """Örneklem büyüklüğüne göre veri güven seviyesi (90 günlük analiz odaklı)."""
+    if total_matches >= 80:
         level = "Daha güvenilir"
-        detail = f"{total_matches} maçlık örneklem — trend yorumları daha anlamlı."
-    elif total_matches >= 10:
+        detail = (
+            f"{total_matches} maç / {days} gün — dönemsel trend ve harita havuzu yorumları anlamlı."
+        )
+    elif total_matches >= 40:
         level = "Orta güven"
-        detail = f"{total_matches} maç — genel eğilimler görülebilir, harita bazlı kesin yorum sınırlı."
+        detail = (
+            f"{total_matches} maç / {days} gün — genel eğilimler görülebilir; "
+            "harita bazlı kesin yorum için daha fazla örnek gerekebilir."
+        )
     else:
         level = "Düşük güven"
-        detail = f"{total_matches} maç — erken örneklem; kararlar için daha fazla veri toplanmalı."
+        detail = (
+            f"{total_matches} maç / {days} gün — erken örneklem; "
+            "90 günlük kararlar için daha fazla maç toplanmalı."
+        )
 
     notes: list[str] = []
+    if total_matches < 120:
+        notes.append(
+            f"İstenen 120 maça karşı {total_matches} maç analiz edildi — "
+            "oyun sıklığına bağlı olarak pencere dolmamış olabilir."
+        )
     kast_missing = any("KAST" in f for f in missing_fields)
     if kast_missing:
-        notes.append("KAST verisi eksik — round katkısı ve takım oyunu metrikleri sınırlı güvenilirlikte.")
+        notes.append("KAST verisi eksik — round katkı metrikleri sınırlı.")
 
     stats_missing = any("istatistikleri" in f for f in missing_fields)
     if stats_missing:
         notes.append("Bazı maçlarda istatistik alınamadı — ortalamalar çarpıtılabilir.")
 
-    if not notes:
-        notes.append("Kritik eksik alan tespit edilmedi.")
+    notes.append(
+        "Counter-strafe ve spray metrikleri FACEIT API'den gelmez; demo analizi gerekir."
+    )
+
+    if len(notes) == 1 and "Counter-strafe" in notes[0]:
+        notes.insert(0, "Kritik eksik alan tespit edilmedi.")
 
     return {
         "level": level,
         "detail": detail,
         "notes": notes,
         "match_count": total_matches,
+        "days": days,
+    }
+
+
+def compute_persistent_problems(
+    summary: dict[str, Any],
+    period_data: dict[str, Any],
+    memory: dict[str, Any],
+) -> list[str]:
+    """Tekrarlayan / kalıcı problemleri listeler."""
+    problems: list[str] = []
+
+    def _f(val: Any) -> float | None:
+        if val in (None, MISSING_DATA_LABEL):
+            return None
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return None
+
+    wr = _f(summary.get("win_rate_pct"))
+    if wr is not None and wr < 45:
+        problems.append(f"Dönem genelinde düşük kazanma oranı ({wr}%).")
+
+    kd = _f(summary.get("avg_kd_ratio"))
+    if kd is not None and kd < 1.0:
+        problems.append(f"Dönem genelinde K/D 1.0 altında ({kd}).")
+
+    for key in ("first_30_days", "middle_30_days", "last_30_days"):
+        ps = period_data.get(key, {}).get("summary", {})
+        pwr = _f(ps.get("win_rate_pct"))
+        if pwr is not None and pwr < 40:
+            label = period_data.get(key, {}).get("label", key)
+            problems.append(f"{label}: düşük kazanma oranı ({pwr}%).")
+
+    for item in memory.get("unchanged_problems") or []:
+        if item not in problems:
+            problems.append(item)
+
+    if not problems:
+        problems.append("Belirgin kalıcı problem tespit edilmedi.")
+    return problems
+
+
+def compute_new_matches_baseline(
+    matches: list[dict[str, Any]],
+    new_match_ids: list[str],
+    baseline_summary: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Yeni maçların önceki dönem baseline'ına göre performansını kıyaslar."""
+    if not new_match_ids:
+        return {
+            "has_new": False,
+            "message": "Yeni maç yok — baseline korunuyor.",
+            "insights": [],
+        }
+
+    new_only = [m for m in matches if m.get("match_id") in new_match_ids]
+    new_summary = compute_performance_summary(matches=new_only)
+
+    if not baseline_summary:
+        return {
+            "has_new": True,
+            "new_count": len(new_match_ids),
+            "new_summary": new_summary,
+            "message": "İlk analiz — yeni maçlar için baseline kıyaslaması yok.",
+            "insights": [],
+        }
+
+    insights: list[str] = []
+    pairs = [
+        ("Kazanma oranı", "win_rate_pct", 3.0),
+        ("K/D", "avg_kd_ratio", 0.05),
+        ("ADR", "avg_adr", 3.0),
+    ]
+    for label, key, threshold in pairs:
+        try:
+            n = new_summary.get(key)
+            b = baseline_summary.get(key)
+            if n in (None, MISSING_DATA_LABEL) or b in (None, MISSING_DATA_LABEL):
+                continue
+            nf, bf = float(n), float(b)
+            diff = nf - bf
+            if abs(diff) >= threshold:
+                direction = "üzerinde" if diff > 0 else "altında"
+                insights.append(
+                    f"Yeni maçlarda {label} baseline'ın {direction} ({bf} → {nf})."
+                )
+        except (TypeError, ValueError):
+            continue
+
+    if not insights:
+        insights.append("Yeni maçlar baseline ile benzer performans gösteriyor.")
+
+    return {
+        "has_new": True,
+        "new_count": len(new_match_ids),
+        "new_summary": new_summary,
+        "message": f"{len(new_match_ids)} yeni maç baseline ile kıyaslandı.",
+        "insights": insights,
     }

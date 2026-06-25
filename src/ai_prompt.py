@@ -34,6 +34,11 @@ def build_ai_context(processed_payload: dict[str, Any]) -> dict[str, Any]:
         "recent_form": processed_payload.get("recent_form"),
         "map_stats": processed_payload.get("map_stats"),
         "data_confidence": processed_payload.get("data_confidence"),
+        "period_comparison": processed_payload.get("period_comparison"),
+        "period_insights": processed_payload.get("period_insights"),
+        "persistent_problems": processed_payload.get("persistent_problems"),
+        "new_matches_baseline": processed_payload.get("new_matches_baseline"),
+        "analysis_window": processed_payload.get("analysis_window"),
         "memory": {
             "is_first_analysis": memory.get("is_first_analysis"),
             "status_message": memory.get("status_message"),

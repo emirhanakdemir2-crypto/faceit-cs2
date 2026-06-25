@@ -6,6 +6,8 @@ data/raw/
 data/processed/
 data/reports/
 data/db/
+data/ai_exports/
+data/demos/
 *.egg-info/
 .eggs/
 dist/
