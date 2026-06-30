@@ -9,8 +9,8 @@ from typing import Any
 
 from src.config import MISSING_DATA_LABEL
 
-DEMO_EXTENSIONS = (".dem", ".dem.gz", ".dem.zst")
-COMPRESSED_EXTENSIONS = (".dem.gz", ".dem.zst")
+DEMO_EXTENSIONS = (".dem", ".dem.gz", ".dem.zst", ".zst")
+COMPRESSED_EXTENSIONS = (".dem.gz", ".dem.zst", ".zst")
 MATCH_ID_RE = re.compile(
     r"1-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
     re.I,
@@ -26,6 +26,7 @@ HIGH_LONG_SPRAY_PCT = 35.0
 NON_GUN_WEAPON_PARTS = (
     "knife", "grenade", "flash", "smoke", "molotov", "incgrenade", "decoy", "c4",
 )
+RIFLE_WEAPON_PARTS = ("ak47", "m4a1", "m4a4", "aug", "sg556", "galil", "famas")
 
 
 def demoparser_available() -> bool:
@@ -58,6 +59,24 @@ def _is_gun_weapon(weapon: str | None) -> bool:
         return False
     w = weapon.lower()
     return not any(part in w for part in NON_GUN_WEAPON_PARTS)
+
+
+def _is_rifle_weapon(weapon: str | None) -> bool:
+    if not weapon:
+        return False
+    w = weapon.lower()
+    return any(part in w for part in RIFLE_WEAPON_PARTS)
+
+
+def _is_ak_weapon(weapon: str | None) -> bool:
+    return bool(weapon and "ak47" in weapon.lower())
+
+
+def _is_m4_weapon(weapon: str | None) -> bool:
+    if not weapon:
+        return False
+    w = weapon.lower()
+    return "m4a1" in w or "m4a4" in w
 
 
 def _row_player_name(row: dict[str, Any], *keys: str) -> str | None:
@@ -107,7 +126,11 @@ def _extract_match_id(filename: str) -> str | None:
 
 def _is_native_dem(filename: str) -> bool:
     name = filename.lower()
-    return name.endswith(".dem") and not name.endswith(".dem.gz") and not name.endswith(".dem.zst")
+    if name.endswith(".dem.gz") or name.endswith(".dem.zst"):
+        return False
+    if name.endswith(".zst"):
+        return False
+    return name.endswith(".dem")
 
 
 def _decompressed_dem_path(compressed_path: Path) -> Path:
@@ -117,11 +140,13 @@ def _decompressed_dem_path(compressed_path: Path) -> Path:
         return compressed_path.with_name(name[:-4])
     if lower.endswith(".dem.gz"):
         return compressed_path.with_name(name[:-3])
+    if lower.endswith(".zst"):
+        return compressed_path.with_name(f"{name[:-4]}.dem")
     return compressed_path
 
 
 def extract_compressed_demo(compressed_path: Path) -> dict[str, Any]:
-    """Sıkıştırılmış .dem.zst / .dem.gz dosyasını aynı klasöre .dem olarak çıkarır."""
+    """Sıkıştırılmış .dem.zst / .dem.gz / .zst dosyasını aynı klasöre .dem olarak çıkarır."""
     result: dict[str, Any] = {
         "source": compressed_path.name,
         "source_path": str(compressed_path.resolve()),
@@ -147,7 +172,7 @@ def extract_compressed_demo(compressed_path: Path) -> dict[str, Any]:
 
     name_lower = compressed_path.name.lower()
     try:
-        if name_lower.endswith(".dem.zst"):
+        if name_lower.endswith(".dem.zst") or name_lower.endswith(".zst"):
             try:
                 import zstandard as zstd
             except ImportError:
@@ -175,7 +200,7 @@ def extract_compressed_demo(compressed_path: Path) -> dict[str, Any]:
 
 
 def find_demo_files(demo_folder: Path) -> list[dict[str, Any]]:
-    """Demo klasöründeki .dem / .dem.gz / .dem.zst dosyalarını listeler."""
+    """Demo klasöründeki demo dosyalarını listeler (.dem, .zst, .dem.gz, .dem.zst)."""
     if not demo_folder.exists():
         return []
 
@@ -547,11 +572,16 @@ def _shot_debug_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _generate_mechanics_commentary(metrics: dict[str, Any]) -> list[str]:
+def _generate_mechanics_commentary(metrics: dict[str, Any], *, rifle_only: bool = False) -> list[str]:
     notes: list[str] = []
-    moving_pct = metrics.get("shots_while_moving_pct")
-    first_pct = metrics.get("first_bullet_moving_pct")
-    long_spray = metrics.get("long_spray_pct")
+    prefix = "rifle_" if rifle_only else ""
+    moving_pct = metrics.get(f"{prefix}shots_while_moving_pct", metrics.get("shots_while_moving_pct"))
+    first_pct = metrics.get(f"{prefix}first_bullet_moving_pct", metrics.get("first_bullet_moving_pct"))
+    long_spray = metrics.get(f"{prefix}long_spray_pct", metrics.get("long_spray_pct"))
+    confidence = metrics.get(f"{prefix}metrics_confidence", metrics.get("metrics_confidence", "none"))
+
+    if confidence == "none":
+        return ["Velocity verisi yetersiz; kesin counter-strafe yorumu yapılmadı."]
 
     if isinstance(moving_pct, (int, float)) and moving_pct >= HIGH_MOVING_PCT:
         notes.append("Counter-strafe problemi şüphesi.")
@@ -560,13 +590,9 @@ def _generate_mechanics_commentary(metrics: dict[str, Any]) -> list[str]:
     if isinstance(long_spray, (int, float)) and long_spray >= HIGH_LONG_SPRAY_PCT:
         notes.append("Uzun spray alışkanlığı var; burst/reset çalış.")
     if not notes:
-        notes.append("Belirgin counter-strafe/spray sinyali yok; yine de demo parser ilk sürüm sinyalidir.")
+        scope = "Rifle" if rifle_only else "Genel"
+        notes.append(f"{scope}: belirgin counter-strafe/spray sinyali yok; demo parser ilk sürüm sinyalidir.")
     return notes
-    try:
-        tick = row.get("tick")
-        return int(tick) if tick is not None else None
-    except (TypeError, ValueError):
-        return None
 
 
 def match_shots_to_tick_velocity(
@@ -619,17 +645,36 @@ def _mechanics_confidence(matched_with_speed: int, total_shots: int) -> str:
     return "none"
 
 
+def _prefix_mechanics(metrics: dict[str, Any], prefix: str) -> dict[str, Any]:
+    """Metrik anahtarlarına prefix ekler (örn. rifle_total_shots)."""
+    skip = {"weapon_shot_counts", "ak_m4_shot_counts", "speed_sources", "commentary", "_raw", "ak_metrics", "m4_metrics"}
+    out: dict[str, Any] = {}
+    for key, val in metrics.items():
+        if key in skip or key.startswith(prefix):
+            out[f"{prefix}_{key}" if not key.startswith(prefix) else key] = val
+        else:
+            out[f"{prefix}_{key}"] = val
+    return out
+
+
 def _compute_shot_mechanics(
     shot_rows: list[dict[str, Any]],
     *,
     tick_rows: list[dict[str, Any]] | None = None,
+    weapon_filter: Any | None = None,
 ) -> dict[str, Any]:
     """user_velocity (shot event) tabanlı counter-strafe / spray ön metrikleri."""
     rows = match_shots_to_tick_velocity(shot_rows, tick_rows or [])
-    gun_rows = [
-        row for row in rows
-        if _is_gun_weapon(_row_player_name(row, "weapon", "weapon_name"))
-    ] or rows
+    if weapon_filter is not None:
+        gun_rows = [
+            row for row in rows
+            if weapon_filter(_row_player_name(row, "weapon", "weapon_name"))
+        ]
+    else:
+        gun_rows = [
+            row for row in rows
+            if _is_gun_weapon(_row_player_name(row, "weapon", "weapon_name"))
+        ] or rows
 
     total_shots = len(gun_rows)
     speeds: list[float] = []
@@ -693,6 +738,12 @@ def _compute_shot_mechanics(
         "velocity_source": "user_velocity",
         "speed_sources": source_counts,
         "burst_count": len(bursts),
+        "moving_shots": moving_shots,
+        "first_bullet_moving": first_bullet_moving,
+        "bursts_with_first_velocity": bursts_with_first_velocity,
+        "long_spray_bursts": long_spray_bursts,
+        "burst_length_sum": sum(burst_lengths),
+        "speed_sum": sum(speeds),
         "shots_while_moving_pct": MISSING_DATA_LABEL,
         "first_bullet_moving_pct": MISSING_DATA_LABEL,
         "average_speed_at_shot": MISSING_DATA_LABEL,
@@ -743,6 +794,96 @@ def _compute_shot_mechanics(
         + " Kesin spray kontrolü teşhisi değil; mermi dağılımı/hit doğrulaması sınırlı."
     )
     return metrics
+
+
+def _build_full_mechanics(
+    shot_rows: list[dict[str, Any]],
+    *,
+    tick_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Tüm silah + rifle + AK + M4 metrik paketi."""
+    base = _compute_shot_mechanics(shot_rows, tick_rows=tick_rows)
+    rifle = _compute_shot_mechanics(shot_rows, tick_rows=tick_rows, weapon_filter=_is_rifle_weapon)
+    ak = _compute_shot_mechanics(shot_rows, tick_rows=tick_rows, weapon_filter=_is_ak_weapon)
+    m4 = _compute_shot_mechanics(shot_rows, tick_rows=tick_rows, weapon_filter=_is_m4_weapon)
+
+    merged = {**base}
+    merged.update(_prefix_mechanics(rifle, "rifle"))
+    merged["ak_metrics"] = ak
+    merged["m4_metrics"] = m4
+    merged["rifle_commentary"] = _generate_mechanics_commentary(merged, rifle_only=True)
+    merged["commentary"] = _generate_mechanics_commentary(base, rifle_only=False)
+    merged["counter_strafe_commentary"] = merged["rifle_commentary"]
+    return merged
+
+
+def combine_mechanics_metrics(metrics_list: list[dict[str, Any]], *, prefix: str = "") -> dict[str, Any]:
+    """Birden fazla demo metrik paketini ağırlıklı birleştirir."""
+    key = lambda name: f"{prefix}{name}" if prefix else name
+    valid = [m for m in metrics_list if m.get(key("total_shots"), m.get("total_shots", 0)) > 0]
+    if not valid:
+        return {"reliable": False, "metrics_confidence": "none", "note": "Birleştirilecek veri yok."}
+
+    def _sum_field(name: str) -> int | float:
+        return sum(
+            m.get(key(name), m.get(name, 0)) or 0
+            for m in valid
+        )
+
+    total_shots = int(_sum_field("total_shots"))
+    matched = int(_sum_field("shots_with_velocity"))
+    moving = int(_sum_field("moving_shots"))
+    first_mov = int(_sum_field("first_bullet_moving"))
+    bursts_first = int(_sum_field("bursts_with_first_velocity"))
+    long_spray = int(_sum_field("long_spray_bursts"))
+    burst_count = int(_sum_field("burst_count"))
+    burst_len_sum = int(_sum_field("burst_length_sum"))
+    speed_sum = float(_sum_field("speed_sum"))
+
+    confidence = _mechanics_confidence(matched, total_shots)
+    reliable = matched >= MIN_SHOTS_FOR_METRICS and confidence != "none"
+
+    out_key = lambda n: f"{prefix}{n}" if prefix else n
+
+    combined: dict[str, Any] = {
+        out_key("reliable"): reliable,
+        out_key("metrics_confidence"): confidence,
+        out_key("total_shots"): total_shots,
+        out_key("shots_with_velocity"): matched,
+        out_key("burst_count"): burst_count,
+        out_key("moving_shots"): moving,
+        out_key("first_bullet_moving"): first_mov,
+        out_key("bursts_with_first_velocity"): bursts_first,
+        out_key("long_spray_bursts"): long_spray,
+        out_key("burst_length_sum"): burst_len_sum,
+        out_key("speed_sum"): speed_sum,
+        out_key("note"): "",
+    }
+
+    if not reliable:
+        combined[out_key("note")] = (
+            f"Combined {prefix or 'genel'}: velocity verisi yetersiz ({matched}/{total_shots})."
+        )
+        return combined
+
+    combined.update({
+        out_key("shots_while_moving_pct"): round(moving / matched * 100, 1) if matched else 0,
+        out_key("first_bullet_moving_pct"): round(
+            first_mov / bursts_first * 100, 1,
+        ) if bursts_first else 0,
+        out_key("average_speed_at_shot"): round(speed_sum / matched, 1) if matched else MISSING_DATA_LABEL,
+        out_key("spray_length_average"): round(
+            burst_len_sum / burst_count, 1,
+        ) if burst_count else MISSING_DATA_LABEL,
+        out_key("long_spray_pct"): round(long_spray / burst_count * 100, 1) if burst_count else 0,
+        out_key("velocity_match_pct"): round(matched / total_shots * 100, 1) if total_shots else 0,
+    })
+    combined[out_key("commentary")] = _generate_mechanics_commentary(
+        combined, rifle_only=bool(prefix),
+    )
+    if prefix:
+        combined[out_key("counter_strafe_commentary")] = combined[out_key("commentary")]
+    return combined
 
 
 def collect_demo_debug_info(
@@ -816,7 +957,7 @@ def collect_demo_debug_info(
         matched_shots = match_shots_to_tick_velocity(
             shots.get("rows") or [], ticks.get("rows") or [],
         )
-        mechanics_preview = _compute_shot_mechanics(
+        mechanics_preview = _build_full_mechanics(
             shots.get("rows") or [], tick_rows=ticks.get("rows") or [],
         )
 
@@ -1025,12 +1166,12 @@ def parse_demo_basic(
             "note": "Shot event var ama player velocity alanı bulunamadı.",
         }
         if shots.get("available") and shots.get("rows"):
-            mechanics = _compute_shot_mechanics(
+            mechanics = _build_full_mechanics(
                 shots["rows"],
                 tick_rows=ticks.get("rows") or [],
             )
 
-        confidence = mechanics.get("metrics_confidence", "none")
+        confidence = mechanics.get("rifle_metrics_confidence", mechanics.get("metrics_confidence", "none"))
         if matched and kd["kills"] + kd["deaths"] > 0 and confidence == "none":
             confidence = "low"
 
@@ -1098,7 +1239,10 @@ def build_mechanics_summary(
     ok_demos = [p for p in parsed_demos if p.get("status") == "ok"]
     unavailable_demos = [p for p in parsed_demos if p.get("status") == "unavailable"]
     parser_attempted = len(parsed_demos) > 0
-    mechanics_produced = any(d.get("mechanics", {}).get("reliable") for d in ok_demos)
+    mechanics_produced = any(
+        d.get("mechanics", {}).get("rifle_reliable") or d.get("mechanics", {}).get("reliable")
+        for d in ok_demos
+    )
 
     if not demo_files:
         return {
@@ -1156,7 +1300,37 @@ def build_mechanics_summary(
         },
     }
 
-    reliable_mech = [d.get("mechanics", {}) for d in ok_demos if d.get("mechanics", {}).get("reliable")]
+    reliable_mech = [
+        d.get("mechanics", {}) for d in ok_demos
+        if d.get("mechanics", {}).get("rifle_reliable") or d.get("mechanics", {}).get("reliable")
+    ]
+    per_demo_cards = []
+    for d in parsed_demos:
+        mech = d.get("mechanics") or {}
+        per_demo_cards.append({
+            "demo_file": d.get("demo_file"),
+            "player_matched": d.get("player_matched"),
+            "kills": d.get("kills", 0),
+            "deaths": d.get("deaths", 0),
+            "round_count": d.get("round_count"),
+            "total_shots": mech.get("total_shots", 0),
+            "rifle_total_shots": mech.get("rifle_total_shots", 0),
+            "rifle_first_bullet_moving_pct": mech.get("rifle_first_bullet_moving_pct"),
+            "rifle_shots_while_moving_pct": mech.get("rifle_shots_while_moving_pct"),
+            "rifle_long_spray_pct": mech.get("rifle_long_spray_pct"),
+            "confidence": mech.get("rifle_metrics_confidence", mech.get("metrics_confidence", "none")),
+            "status": d.get("status"),
+        })
+
+    combined_rifle = combine_mechanics_metrics(reliable_mech, prefix="rifle_")
+    combined_general = combine_mechanics_metrics(reliable_mech, prefix="")
+    combined_ak = combine_mechanics_metrics(
+        [m.get("ak_metrics", {}) for m in reliable_mech], prefix="",
+    )
+    combined_m4 = combine_mechanics_metrics(
+        [m.get("m4_metrics", {}) for m in reliable_mech], prefix="",
+    )
+
     if reliable_mech:
         def _avg(key: str) -> float | str:
             vals = [m[key] for m in reliable_mech if isinstance(m.get(key), (int, float))]
@@ -1172,24 +1346,44 @@ def build_mechanics_summary(
 
         aggregated["mechanics"] = {
             "reliable": True,
-            "metrics_confidence": reliable_mech[0].get("metrics_confidence", "medium"),
+            "rifle_reliable": bool(combined_rifle.get("rifle_reliable")),
+            "metrics_confidence": combined_rifle.get("rifle_metrics_confidence", "medium"),
+            "rifle_metrics_confidence": combined_rifle.get("rifle_metrics_confidence", "none"),
+            "combined_rifle": combined_rifle,
+            "combined_general": combined_general,
+            "combined_ak": combined_ak,
+            "combined_m4": combined_m4,
+            "counter_strafe_commentary": combined_rifle.get("rifle_commentary") or _generate_mechanics_commentary(
+                combined_rifle, rifle_only=True,
+            ),
             "shots_with_velocity": sum(m.get("shots_with_velocity", 0) for m in reliable_mech),
             "total_shots": sum(m.get("total_shots", 0) for m in reliable_mech),
+            "rifle_total_shots": combined_rifle.get("rifle_total_shots", 0),
+            "rifle_shots_with_velocity": combined_rifle.get("rifle_shots_with_velocity", 0),
+            "rifle_shots_while_moving_pct": combined_rifle.get("rifle_shots_while_moving_pct"),
+            "rifle_first_bullet_moving_pct": combined_rifle.get("rifle_first_bullet_moving_pct"),
+            "rifle_average_speed_at_shot": combined_rifle.get("rifle_average_speed_at_shot"),
+            "rifle_median_speed_at_shot": _avg("rifle_median_speed_at_shot"),
+            "rifle_spray_length_average": combined_rifle.get("rifle_spray_length_average"),
+            "rifle_long_spray_pct": combined_rifle.get("rifle_long_spray_pct"),
             "burst_count": sum(m.get("burst_count", 0) for m in reliable_mech),
-            "shots_while_moving_pct": _avg("shots_while_moving_pct"),
-            "first_bullet_moving_pct": _avg("first_bullet_moving_pct"),
-            "average_speed_at_shot": _avg("average_speed_at_shot"),
+            "shots_while_moving_pct": combined_general.get("shots_while_moving_pct"),
+            "first_bullet_moving_pct": combined_general.get("first_bullet_moving_pct"),
+            "average_speed_at_shot": combined_general.get("average_speed_at_shot"),
             "median_speed_at_shot": _avg("median_speed_at_shot"),
-            "spray_length_average": _avg("spray_length_average"),
-            "long_spray_pct": _avg("long_spray_pct"),
-            "ak_m4_burst_average": _avg("ak_m4_burst_average"),
+            "spray_length_average": combined_general.get("spray_length_average"),
+            "long_spray_pct": combined_general.get("long_spray_pct"),
             "weapon_shot_counts": weapon_totals,
             "ak_m4_shot_counts": ak_totals,
-            "commentary": reliable_mech[0].get("commentary") or [],
-            "note": reliable_mech[0].get("note") or (
-                f"{len(reliable_mech)} demo üzerinden user_velocity ön metrik ortalaması."
+            "ak_metrics": combined_ak,
+            "m4_metrics": combined_m4,
+            "commentary": combined_rifle.get("rifle_commentary") or [],
+            "note": (
+                f"{len(reliable_mech)} demo combined — counter-strafe yorumu rifle-only metriklerle üretildi."
             ),
         }
+
+    aggregated["per_demo_cards"] = per_demo_cards
 
     all_weapons: dict[str, int] = {}
     for d in ok_demos:
@@ -1241,15 +1435,19 @@ def build_mechanics_summary(
         "başarısız" if parser_attempted else "denenmedi"
     )
 
+    parseable_list = preparation.get("parseable") or parseable
+    logical_demo_count = len(parseable_list) if parseable_list else len(demo_files)
+
     return {
         "status": status,
         "reason": reason,
-        "demo_count": len(demo_files),
+        "demo_count": logical_demo_count,
         "confidence": confidence,
         "folder": str(demo_folder.resolve()),
         "nickname": nickname,
         "parser": "demoparser2" if demoparser_available() else "none",
-        "found_count": len(demo_files),
+        "found_count": logical_demo_count,
+        "raw_file_count": len(demo_files),
         "parsed_count": len(ok_demos),
         "compressed_count": len(compressed),
         "compressed_found": bool(compressed),
@@ -1262,4 +1460,5 @@ def build_mechanics_summary(
         "matched_name": matched_names[0] if matched_names else None,
         "demos": parsed_demos,
         "aggregated": aggregated,
+        "per_demo_cards": per_demo_cards,
     }

@@ -17,7 +17,7 @@ def run_mechanics_lab(
     demo_folder: Path,
     nickname: str,
     *,
-    max_demos: int = 5,
+    max_demos: int = 20,
     debug_demo: bool = False,
     debug_report_dir: Path | None = None,
 ) -> dict[str, Any]:
@@ -37,9 +37,14 @@ def run_mechanics_lab(
         parsed.append(result)
         if debug_demo and result.get("debug") and debug_report_dir is not None:
             safe = nickname.lower()
-            debug_path = debug_report_dir / f"{safe}_demo_debug_latest.md"
-            write_demo_debug_report(debug_path, result["debug"])
-            debug_paths.append(str(debug_path.resolve()))
+            stem = Path(entry.get("path", "demo")).stem
+            per_path = debug_report_dir / f"{safe}_{stem}_demo_debug.md"
+            latest_path = debug_report_dir / f"{safe}_demo_debug_latest.md"
+            write_demo_debug_report(per_path, result["debug"])
+            write_demo_debug_report(latest_path, result["debug"])
+            debug_paths.append(str(per_path.resolve()))
+            if str(latest_path.resolve()) not in debug_paths:
+                debug_paths.append(str(latest_path.resolve()))
 
     summary = build_mechanics_summary(
         raw_files,
@@ -130,13 +135,29 @@ def render_mechanics_lab_markdown(lab: dict[str, Any]) -> list[str]:
         f"* Demo içinde eşleşme: {_yes_no(lab.get('player_matched'))}",
         f"* Not: {_fmt(lab.get('matched_name') or 'Oyuncu adı demo içinde bulunamadı; metrikler sınırlı olabilir.')}",
         "",
-        "### Temel Demo Eventleri",
+        "### Demo Başına Özet (Rifle-Only Counter-Strafe)",
+        "",
+        "| Demo | Eşleşme | K/D | Round | Total shots | Rifle shots | 1st bullet mov % | Mov % | Long spray % | Güven |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ])
+    for card in lab.get("per_demo_cards") or aggregated.get("per_demo_cards") or []:
+        kd = f"{card.get('kills', 0)}/{card.get('deaths', 0)}"
+        lines.append(
+            f"| `{_fmt(card.get('demo_file'))}` | {_yes_no(card.get('player_matched'))} | "
+            f"{kd} | {_fmt(card.get('round_count'))} | {_fmt(card.get('total_shots'))} | "
+            f"{_fmt(card.get('rifle_total_shots'))} | {_fmt(card.get('rifle_first_bullet_moving_pct'))} | "
+            f"{_fmt(card.get('rifle_shots_while_moving_pct'))} | {_fmt(card.get('rifle_long_spray_pct'))} | "
+            f"{_fmt(card.get('confidence'))} |"
+        )
+    lines.extend([
+        "",
+        "### Temel Demo Eventleri (Combined)",
         "",
         f"* Kill/death event çıktı mı: {_yes_no((agg.get('kills') or 0) + (agg.get('deaths') or 0) > 0)}",
         f"* Kill: {_fmt(agg.get('kills'))}",
         f"* Death: {_fmt(agg.get('deaths'))}",
         f"* Silahlar: {_fmt(', '.join(agg.get('weapons') or []) or MISSING_DATA_LABEL)}",
-        f"* Round sayısı: {_fmt(agg.get('round_count'))}",
+        f"* Round sayısı (max): {_fmt(agg.get('round_count'))}",
         f"* Shot event sayısı: {_fmt(agg.get('shot_count'))}",
         f"* Player tick sayısı: {_fmt(agg.get('tick_count'))}",
         f"* Shot event çıktı mı: {_yes_no(agg.get('shot_event_available'))}",
@@ -145,7 +166,7 @@ def render_mechanics_lab_markdown(lab: dict[str, Any]) -> list[str]:
         f"* Eşleşen shot+velocity sayısı: {_fmt(agg.get('shots_with_velocity'))}",
         "",
         f"* Mekanik metrik üretildi mi: {_yes_no(lab.get('mechanics_produced'))}",
-        f"* Metrik güven seviyesi: {_fmt(mech.get('metrics_confidence', lab.get('confidence')))}",
+        f"* Rifle metrik güven seviyesi: {_fmt(mech.get('rifle_metrics_confidence', mech.get('metrics_confidence', lab.get('confidence'))))}",
         "",
     ])
 
@@ -169,7 +190,70 @@ def render_mechanics_lab_markdown(lab: dict[str, Any]) -> list[str]:
                 lines.append(f"- {prefix} — {_fmt(demo.get('reason', 'okunamadı'))}")
         lines.append("")
 
-    lines.extend(["### Counter-strafe / Spray Ön Metrikleri", ""])
+    lines.extend(["### Rifle-Only Counter-strafe / Spray (Combined)", ""])
+    rifle_reliable = mech.get("rifle_reliable") or mech.get("reliable")
+    if rifle_reliable:
+        lines.extend([
+            f"* rifle_total_shots: {_fmt(mech.get('rifle_total_shots'))}",
+            f"* rifle_shots_with_velocity: {_fmt(mech.get('rifle_shots_with_velocity'))}",
+            f"* rifle_shots_while_moving_pct (>34): {_fmt(mech.get('rifle_shots_while_moving_pct'))}",
+            f"* rifle_first_bullet_moving_pct: {_fmt(mech.get('rifle_first_bullet_moving_pct'))}",
+            f"* rifle_average_speed_at_shot: {_fmt(mech.get('rifle_average_speed_at_shot'))}",
+            f"* rifle_median_speed_at_shot: {_fmt(mech.get('rifle_median_speed_at_shot'))}",
+            f"* rifle_spray_length_average: {_fmt(mech.get('rifle_spray_length_average'))}",
+            f"* rifle_long_spray_pct (7+ mermi): {_fmt(mech.get('rifle_long_spray_pct'))}",
+            "",
+        ])
+        ak = mech.get("ak_metrics") or {}
+        m4 = mech.get("m4_metrics") or {}
+        if ak.get("reliable") or ak.get("total_shots"):
+            lines.extend([
+                "**AK (combined):**",
+                f"* total_shots: {_fmt(ak.get('total_shots'))}",
+                f"* first_bullet_moving_pct: {_fmt(ak.get('first_bullet_moving_pct'))}",
+                f"* shots_while_moving_pct: {_fmt(ak.get('shots_while_moving_pct'))}",
+                f"* spray_length_average: {_fmt(ak.get('spray_length_average'))}",
+                f"* long_spray_pct: {_fmt(ak.get('long_spray_pct'))}",
+                "",
+            ])
+        if m4.get("reliable") or m4.get("total_shots"):
+            lines.extend([
+                "**M4 / M4A1-S (combined):**",
+                f"* total_shots: {_fmt(m4.get('total_shots'))}",
+                f"* first_bullet_moving_pct: {_fmt(m4.get('first_bullet_moving_pct'))}",
+                f"* shots_while_moving_pct: {_fmt(m4.get('shots_while_moving_pct'))}",
+                f"* spray_length_average: {_fmt(m4.get('spray_length_average'))}",
+                f"* long_spray_pct: {_fmt(m4.get('long_spray_pct'))}",
+                "",
+            ])
+        commentary = mech.get("counter_strafe_commentary") or mech.get("commentary") or []
+        if commentary:
+            lines.extend(["**Counter-strafe yorumu (rifle-only):**", ""])
+            for note in commentary:
+                lines.append(f"- {note}")
+            lines.append("")
+        if mech.get("note"):
+            lines.append(f"_{mech['note']}_")
+            lines.append("")
+        lines.extend([
+            "### Genel silah metrikleri (SMG/pistol dahil — counter-strafe için kullanılmaz)",
+            "",
+            f"* Total shots: {_fmt(mech.get('total_shots'))}",
+            f"* Shots while moving %: {_fmt(mech.get('shots_while_moving_pct'))}",
+            f"* First bullet moving %: {_fmt(mech.get('first_bullet_moving_pct'))}",
+            f"* Spray length average: {_fmt(mech.get('spray_length_average'))}",
+            f"* Long spray %: {_fmt(mech.get('long_spray_pct'))}",
+            "",
+        ])
+    else:
+        note = mech.get(
+            "note",
+            "Rifle shot event var ama user_velocity alanı bulunamadı veya eşleşmedi.",
+        )
+        lines.append(f"_{note}_")
+        lines.append("")
+
+    lines.extend(["### Counter-strafe / Spray Ön Metrikleri (legacy genel)", ""])
     if mech.get("reliable"):
         lines.extend([
             f"* Total shots (gun): {_fmt(mech.get('total_shots'))}",
