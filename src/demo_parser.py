@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import math
 import re
 import shutil
 from pathlib import Path
@@ -14,9 +15,12 @@ MATCH_ID_RE = re.compile(
     r"1-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
     re.I,
 )
-MOVING_SPEED_THRESHOLD = 34.0
+MOVING_SPEED_THRESHOLD = 5.0
 MIN_SHOTS_FOR_METRICS = 20
 SPRAY_GAP_TICKS = 16
+NON_GUN_WEAPON_PARTS = (
+    "knife", "grenade", "flash", "smoke", "molotov", "incgrenade", "decoy", "c4",
+)
 
 
 def demoparser_available() -> bool:
@@ -26,6 +30,49 @@ def demoparser_available() -> bool:
         return True
     except ImportError:
         return False
+
+
+def get_demoparser_version() -> str:
+    try:
+        import demoparser2
+
+        return str(getattr(demoparser2, "__version__", "unknown"))
+    except ImportError:
+        return "not installed"
+
+
+def _is_nan(val: Any) -> bool:
+    try:
+        return val is None or (isinstance(val, float) and math.isnan(val))
+    except (TypeError, ValueError):
+        return val is None
+
+
+def _is_gun_weapon(weapon: str | None) -> bool:
+    if not weapon:
+        return False
+    w = weapon.lower()
+    return not any(part in w for part in NON_GUN_WEAPON_PARTS)
+
+
+def _row_player_name(row: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        val = row.get(key)
+        if val not in (None, ""):
+            return str(val)
+    return None
+
+
+def _row_steamid(row: dict[str, Any]) -> int | None:
+    for key in ("user_steamid", "steamid", "attacker_steamid"):
+        val = row.get(key)
+        if val in (None, ""):
+            continue
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _unavailable(reason: str, *, demo_count: int = 0) -> dict[str, Any]:
@@ -195,29 +242,41 @@ def prepare_demos_for_parsing(demo_folder: Path) -> dict[str, Any]:
     }
 
 
-def _resolve_player_names(player_info: Any, nickname: str) -> tuple[bool, str | None, list[str]]:
+def _resolve_player_names(player_info: Any, nickname: str) -> tuple[bool, str | None, int | None, list[str]]:
     nick = nickname.strip().lower()
     all_names: list[str] = []
     matched_name: str | None = None
+    matched_steamid: int | None = None
 
     for row in _df_records(player_info):
-        for key in ("name", "player_name", "playerName"):
-            val = row.get(key)
-            if val:
-                all_names.append(str(val))
-                name_lower = str(val).lower()
-                if nick == name_lower or nick in name_lower or name_lower in nick:
-                    matched_name = str(val)
+        name = _row_player_name(row, "name", "player_name", "playerName")
+        if not name:
+            continue
+        all_names.append(name)
+        name_lower = name.lower()
+        if nick == name_lower or nick in name_lower or name_lower in nick:
+            matched_name = name
+            matched_steamid = _row_steamid(row)
 
-    return matched_name is not None, matched_name, all_names
+    return matched_name is not None, matched_name, matched_steamid, all_names
 
 
-def _row_player_name(row: dict[str, Any], *keys: str) -> str | None:
-    for key in keys:
-        val = row.get(key)
-        if val not in (None, ""):
-            return str(val)
-    return None
+def _row_matches_player(
+    row: dict[str, Any],
+    nickname: str,
+    matched_name: str | None,
+    matched_steamid: int | None,
+) -> bool:
+    sid = _row_steamid(row)
+    if matched_steamid is not None and sid is not None and sid == matched_steamid:
+        return True
+    pname = _row_player_name(row, "user_name", "name", "player_name", "attacker_name")
+    if not pname:
+        return False
+    nick = nickname.strip().lower()
+    target = (matched_name or nickname).strip().lower()
+    pl = pname.lower()
+    return pl == target or nick in pl or pl in nick
 
 
 def extract_kill_death_events(
@@ -278,12 +337,17 @@ def extract_shot_events_if_available(
     parser: Any,
     matched_name: str | None,
     nickname: str,
+    *,
+    matched_steamid: int | None = None,
 ) -> dict[str, Any]:
-    """weapon_fire eventlerini çıkarmayı dener."""
+    """weapon_fire eventlerini çıkarır (demoparser2 user_* kolonları)."""
     result: dict[str, Any] = {
         "available": False,
         "shot_count": 0,
+        "gun_shot_count": 0,
         "rows": [],
+        "columns": [],
+        "velocity_field": None,
         "reason": "",
     }
     if not demoparser_available():
@@ -298,30 +362,35 @@ def extract_shot_events_if_available(
 
         df = parser.parse_event(
             "weapon_fire",
-            player=["X", "Y", "velocity", "name"],
+            player=["X", "Y", "Z", "velocity", "name", "steamid", "tick"],
             other=["weapon"],
         )
         rows = _df_records(df)
+        result["columns"] = list(df.columns) if hasattr(df, "columns") else []
         if not rows:
             result["reason"] = "weapon_fire eventi boş döndü."
             return result
 
-        target = (matched_name or nickname).strip().lower()
-        nick = nickname.strip().lower()
-        filtered: list[dict[str, Any]] = []
-        for row in rows:
-            pname = _row_player_name(row, "name", "player_name")
-            if not pname:
-                filtered.append(row)
-                continue
-            pl = pname.lower()
-            if pl == target or nick in pl or pl in nick:
-                filtered.append(row)
+        velocity_field = None
+        for candidate in ("user_velocity", "velocity"):
+            if candidate in result["columns"]:
+                velocity_field = candidate
+                break
+        result["velocity_field"] = velocity_field
 
-        player_rows = filtered if filtered else rows
-        result["available"] = len(player_rows) > 0
-        result["shot_count"] = len(player_rows)
-        result["rows"] = player_rows
+        filtered = [
+            row for row in rows
+            if _row_matches_player(row, nickname, matched_name, matched_steamid)
+        ]
+        gun_rows = [
+            row for row in filtered
+            if _is_gun_weapon(_row_player_name(row, "weapon", "weapon_name"))
+        ]
+
+        result["available"] = len(filtered) > 0
+        result["shot_count"] = len(filtered)
+        result["gun_shot_count"] = len(gun_rows)
+        result["rows"] = gun_rows if gun_rows else filtered
         if not result["available"]:
             result["reason"] = "Oyuncuya ait shot event bulunamadı."
     except Exception as exc:
@@ -330,120 +399,431 @@ def extract_shot_events_if_available(
     return result
 
 
-def extract_player_ticks_if_available(parser: Any, matched_name: str | None) -> dict[str, Any]:
-    """Tick/velocity verisinin erişilebilirliğini kontrol eder."""
+def extract_player_ticks_if_available(
+    parser: Any,
+    matched_name: str | None,
+    *,
+    matched_steamid: int | None = None,
+) -> dict[str, Any]:
+    """Oyuncuya ait tick/velocity verisini çıkarır."""
     result: dict[str, Any] = {
         "available": False,
         "tick_count": 0,
+        "velocity_ticks": 0,
+        "rows": [],
+        "columns": [],
         "reason": "",
+        "velocity_field": None,
     }
     try:
         kwargs: dict[str, Any] = {}
-        if matched_name:
-            kwargs["players"] = [matched_name]
-        df = parser.parse_ticks(["X", "Y", "velocity", "name"], **kwargs)
+        if matched_steamid is not None:
+            kwargs["players"] = [matched_steamid]
+        elif matched_name:
+            result["reason"] = "SteamID yok; parse_ticks için steamid gerekli."
+            return result
+
+        df = parser.parse_ticks(["X", "Y", "Z", "velocity", "name", "steamid"], **kwargs)
         rows = _df_records(df)
+        result["columns"] = list(df.columns) if hasattr(df, "columns") else []
         result["tick_count"] = len(rows)
-        result["available"] = len(rows) > 0
+        result["rows"] = rows
+        velocity_field = "velocity" if "velocity" in result["columns"] else None
+        result["velocity_field"] = velocity_field
+        result["velocity_ticks"] = sum(
+            1 for row in rows
+            if not _is_nan(_speed_from_row(row))
+        )
+        result["available"] = result["tick_count"] > 0
         if not result["available"]:
             result["reason"] = "Tick verisi boş döndü."
+        elif result["velocity_ticks"] == 0:
+            result["reason"] = "Tick verisi var ancak velocity alanı boş."
     except Exception as exc:
         result["reason"] = f"Tick verisi alınamadı: {exc}"
     return result
 
 
 def _speed_from_row(row: dict[str, Any]) -> float | None:
-    vel = row.get("velocity")
-    if isinstance(vel, (list, tuple)) and len(vel) >= 2:
-        try:
-            return (float(vel[0]) ** 2 + float(vel[1]) ** 2) ** 0.5
-        except (TypeError, ValueError):
-            return None
-    for key in ("speed", "velocity_length"):
-        if key in row and row[key] is not None:
+    for key in ("user_velocity", "velocity_scalar", "velocity", "speed", "velocity_length"):
+        val = row.get(key)
+        if _is_nan(val):
+            continue
+        if isinstance(val, (list, tuple)) and len(val) >= 2:
             try:
-                return float(row[key])
+                return (float(val[0]) ** 2 + float(val[1]) ** 2) ** 0.5
             except (TypeError, ValueError):
-                pass
+                continue
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            continue
     return None
 
 
-def _compute_shot_mechanics(shot_rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Shot + velocity satırlarından ilk mekanik metrikleri hesaplar."""
+def _tick_int(row: dict[str, Any]) -> int | None:
+    try:
+        tick = row.get("tick")
+        return int(tick) if tick is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def match_shots_to_tick_velocity(
+    shot_rows: list[dict[str, Any]],
+    tick_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Shot event tick değerleriyle player tick velocity eşleştirir."""
+    tick_velocity: dict[int, float] = {}
+    for row in tick_rows:
+        tick = _tick_int(row)
+        speed = _speed_from_row(row)
+        if tick is None or speed is None:
+            continue
+        tick_velocity[tick] = speed
+
+    matched: list[dict[str, Any]] = []
+    for shot in shot_rows:
+        tick = _tick_int(shot)
+        speed = _speed_from_row(shot)
+        source = "shot_event" if speed is not None else None
+
+        if speed is None and tick is not None:
+            if tick in tick_velocity:
+                speed = tick_velocity[tick]
+                source = "tick_exact"
+            else:
+                for delta in (0, 1, 2, -1, -2):
+                    candidate = tick + delta
+                    if candidate in tick_velocity:
+                        speed = tick_velocity[candidate]
+                        source = "tick_nearest"
+                        break
+
+        matched.append({
+            **shot,
+            "matched_speed": speed,
+            "speed_source": source,
+        })
+    return matched
+
+
+def _mechanics_confidence(matched_with_speed: int, total_shots: int) -> str:
+    if total_shots <= 0 or matched_with_speed <= 0:
+        return "none"
+    ratio = matched_with_speed / total_shots
+    if ratio >= 0.8:
+        return "medium"
+    if ratio >= 0.2:
+        return "low"
+    return "none"
+
+
+def _compute_shot_mechanics(
+    shot_rows: list[dict[str, Any]],
+    *,
+    tick_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Shot + velocity eşleşmesinden counter-strafe/spray ön metrikleri."""
+    rows = match_shots_to_tick_velocity(shot_rows, tick_rows or [])
+    gun_rows = [
+        row for row in rows
+        if _is_gun_weapon(_row_player_name(row, "weapon", "weapon_name"))
+    ] or rows
+
+    total_shots = len(gun_rows)
     speeds: list[float] = []
     moving_shots = 0
     first_bullet_moving = 0
-    burst_groups = 0
     burst_lengths: list[int] = []
     weapon_counts: dict[str, int] = {}
-    rows_with_speed = 0
+    ak_m4_counts: dict[str, int] = {}
+    matched_with_velocity = 0
+    source_counts: dict[str, int] = {}
 
     current_burst = 0
+    current_weapon: str | None = None
     prev_tick: int | None = None
 
-    for row in shot_rows:
-        speed = _speed_from_row(row)
+    for row in gun_rows:
+        speed = row.get("matched_speed")
+        if speed is None:
+            speed = _speed_from_row(row)
+        source = row.get("speed_source") or ("shot_event" if speed is not None else "none")
+
         weapon = _row_player_name(row, "weapon", "weapon_name") or "unknown"
         weapon_counts[weapon] = weapon_counts.get(weapon, 0) + 1
+        if "ak47" in weapon.lower() or "m4a1" in weapon.lower():
+            ak_m4_counts[weapon] = ak_m4_counts.get(weapon, 0) + 1
 
-        tick_val = row.get("tick")
-        try:
-            tick = int(tick_val) if tick_val is not None else None
-        except (TypeError, ValueError):
-            tick = None
+        tick = _tick_int(row)
 
         if speed is not None:
-            rows_with_speed += 1
-            speeds.append(speed)
-            if speed > MOVING_SPEED_THRESHOLD:
+            matched_with_velocity += 1
+            source_counts[source or "unknown"] = source_counts.get(source or "unknown", 0) + 1
+            speeds.append(float(speed))
+            if float(speed) > MOVING_SPEED_THRESHOLD:
                 moving_shots += 1
-                if current_burst == 0:
-                    first_bullet_moving += 1
 
-        if tick is not None and prev_tick is not None and tick - prev_tick <= SPRAY_GAP_TICKS:
-            current_burst += 1
+        if tick is not None and prev_tick is not None and current_weapon == weapon:
+            if tick - prev_tick <= SPRAY_GAP_TICKS:
+                current_burst += 1
+            else:
+                if current_burst > 0:
+                    burst_lengths.append(current_burst + 1)
+                current_burst = 0
         else:
             if current_burst > 0:
-                burst_groups += 1
                 burst_lengths.append(current_burst + 1)
             current_burst = 0
+
+        if speed is not None and float(speed) > MOVING_SPEED_THRESHOLD and current_burst == 0:
+            first_bullet_moving += 1
+
+        current_weapon = weapon
         prev_tick = tick
 
     if current_burst > 0:
-        burst_groups += 1
         burst_lengths.append(current_burst + 1)
 
-    total_shots = len(shot_rows)
-    reliable = rows_with_speed >= MIN_SHOTS_FOR_METRICS
+    metrics_confidence = _mechanics_confidence(matched_with_velocity, total_shots)
+    reliable = matched_with_velocity >= MIN_SHOTS_FOR_METRICS and metrics_confidence != "none"
 
     metrics: dict[str, Any] = {
         "reliable": reliable,
+        "metrics_confidence": metrics_confidence,
+        "total_shots": total_shots,
+        "shots_with_velocity": matched_with_velocity,
+        "velocity_match_pct": (
+            round(matched_with_velocity / total_shots * 100, 1) if total_shots else 0
+        ),
+        "velocity_fields_found": matched_with_velocity > 0,
+        "speed_sources": source_counts,
         "shots_while_moving_pct": MISSING_DATA_LABEL,
         "first_bullet_moving_pct": MISSING_DATA_LABEL,
         "average_speed_at_shot": MISSING_DATA_LABEL,
         "spray_length_average": MISSING_DATA_LABEL,
         "weapon_shot_counts": weapon_counts,
+        "ak_m4_shot_counts": ak_m4_counts,
         "note": "",
     }
 
     if not reliable:
-        metrics["note"] = (
-            "Bu demoda shot + velocity eşleşmesi güvenilir çıkarılamadı."
-        )
+        if matched_with_velocity == 0:
+            metrics["note"] = (
+                "Shot event var ama player velocity alanı bulunamadı veya eşleşmedi."
+            )
+        else:
+            metrics["note"] = (
+                f"Yalnızca {matched_with_velocity}/{total_shots} shot velocity ile eşleşti; "
+                "güven düşük — veri yetersiz."
+            )
         return metrics
 
-    metrics["shots_while_moving_pct"] = round(moving_shots / rows_with_speed * 100, 1)
+    metrics["shots_while_moving_pct"] = round(moving_shots / matched_with_velocity * 100, 1)
     metrics["first_bullet_moving_pct"] = round(first_bullet_moving / total_shots * 100, 1)
     metrics["average_speed_at_shot"] = round(sum(speeds) / len(speeds), 1)
     if burst_lengths:
         metrics["spray_length_average"] = round(sum(burst_lengths) / len(burst_lengths), 1)
     metrics["note"] = (
-        f"{rows_with_speed} shot üzerinden ön metrik hesaplandı; kesin teşhis için daha fazla demo gerekir."
+        f"{matched_with_velocity} shot velocity ile eşleşti ({metrics['velocity_match_pct']}%). "
+        "Demo parser ilk sürüm mekanik sinyali; kesin profesyonel analiz değildir."
     )
     return metrics
 
 
-def parse_demo_basic(demo_path: str | Path, nickname: str) -> dict[str, Any]:
+def collect_demo_debug_info(
+    demo_path: str | Path,
+    nickname: str,
+) -> dict[str, Any]:
+    """Demo parser debug bilgisi toplar."""
+    path = Path(demo_path)
+    info: dict[str, Any] = {
+        "demo_file": path.name,
+        "demo_path": str(path.resolve()),
+        "parser_version": get_demoparser_version(),
+        "methods_used": [],
+        "nickname": nickname,
+        "errors": [],
+    }
+    if not demoparser_available():
+        info["errors"].append("demoparser2 kurulu değil.")
+        return info
+
+    try:
+        from demoparser2 import DemoParser
+
+        parser = DemoParser(str(path))
+        info["methods_used"] = [
+            "DemoParser",
+            "parse_player_info",
+            "list_game_events",
+            "parse_event(player_death)",
+            "parse_event(weapon_fire)",
+            "parse_ticks",
+        ]
+
+        player_info = parser.parse_player_info()
+        matched, matched_name, matched_steamid, all_names = _resolve_player_names(
+            player_info, nickname,
+        )
+        info["player_matched"] = matched
+        info["matched_name"] = matched_name
+        info["matched_steamid"] = matched_steamid
+        info["players_in_demo"] = all_names
+        info["player_info_columns"] = (
+            list(player_info.columns) if hasattr(player_info, "columns") else []
+        )
+
+        events = parser.list_game_events()
+        info["game_events_sample"] = [
+            e for e in events
+            if any(k in e.lower() for k in ("fire", "shot", "weapon", "death"))
+        ][:20]
+
+        death_cols: list[str] = []
+        death_sample: list[dict[str, Any]] = []
+        if "player_death" in events:
+            death_df = parser.parse_event(
+                "player_death",
+                player=["X", "Y", "name", "steamid"],
+                other=["weapon", "total_rounds_played", "attacker_name", "attacker_steamid"],
+            )
+            death_cols = list(death_df.columns) if hasattr(death_df, "columns") else []
+            death_sample = _df_records(death_df)[:5]
+
+        shots = extract_shot_events_if_available(
+            parser, matched_name, nickname, matched_steamid=matched_steamid,
+        )
+        ticks = extract_player_ticks_if_available(
+            parser, matched_name, matched_steamid=matched_steamid,
+        )
+        shot_sample = (shots.get("rows") or [])[:5]
+        tick_sample = (ticks.get("rows") or [])[:5]
+        matched_shots = match_shots_to_tick_velocity(
+            shots.get("rows") or [], ticks.get("rows") or [],
+        )
+
+        common_keys = []
+        if shots.get("columns") and ticks.get("columns"):
+            common_keys = sorted(set(shots["columns"]) & set(ticks["columns"]))
+
+        info.update({
+            "death_columns": death_cols,
+            "death_sample": death_sample,
+            "shot_columns": shots.get("columns") or [],
+            "shot_sample": shot_sample,
+            "tick_columns": ticks.get("columns") or [],
+            "tick_sample": tick_sample,
+            "shot_velocity_field": shots.get("velocity_field"),
+            "tick_velocity_field": ticks.get("velocity_field"),
+            "shot_count": shots.get("shot_count", 0),
+            "tick_count": ticks.get("tick_count", 0),
+            "velocity_ticks": ticks.get("velocity_ticks", 0),
+            "common_keys": common_keys,
+            "tick_on_shots": all(_tick_int(s) is not None for s in (shots.get("rows") or [])[:10]),
+            "steamid_on_shots": all(_row_steamid(s) is not None for s in (shots.get("rows") or [])[:10]),
+            "matched_shot_sample": matched_shots[:5],
+            "matched_with_velocity": sum(
+                1 for row in matched_shots if row.get("matched_speed") is not None
+            ),
+        })
+    except Exception as exc:
+        info["errors"].append(str(exc))
+
+    return info
+
+
+def render_demo_debug_markdown(debug: dict[str, Any]) -> str:
+    lines = [
+        f"# Demo Parser Debug — {debug.get('demo_file', '?')}",
+        "",
+        f"*Parser version:* {debug.get('parser_version')}",
+        "",
+        "## Kullanılan metodlar",
+        "",
+    ]
+    for method in debug.get("methods_used") or []:
+        lines.append(f"- {method}")
+    lines.append("")
+
+    if debug.get("errors"):
+        lines.extend(["## Hatalar", ""])
+        for err in debug["errors"]:
+            lines.append(f"- {err}")
+        lines.append("")
+
+    lines.extend([
+        "## Oyuncu eşleşmesi",
+        "",
+        f"- Nickname: {debug.get('nickname')}",
+        f"- Eşleşme: {debug.get('player_matched')}",
+        f"- İsim: {debug.get('matched_name')}",
+        f"- SteamID: {debug.get('matched_steamid')}",
+        "",
+        "## Kolon isimleri",
+        "",
+        f"- player_info: `{', '.join(debug.get('player_info_columns') or [])}`",
+        f"- player_death: `{', '.join(debug.get('death_columns') or [])}`",
+        f"- weapon_fire: `{', '.join(debug.get('shot_columns') or [])}`",
+        f"- parse_ticks: `{', '.join(debug.get('tick_columns') or [])}`",
+        "",
+        f"- Shot velocity alanı: {debug.get('shot_velocity_field')}",
+        f"- Tick velocity alanı: {debug.get('tick_velocity_field')}",
+        "",
+        "## Event örnekleri",
+        "",
+        f"- Shot event sayısı: {debug.get('shot_count')}",
+        f"- Player tick sayısı: {debug.get('tick_count')}",
+        f"- Velocity'li tick sayısı: {debug.get('velocity_ticks')}",
+        f"- Eşleşen shot+velocity: {debug.get('matched_with_velocity')}",
+        "",
+        "### İlk 5 shot event",
+        "",
+    ])
+    for row in debug.get("shot_sample") or []:
+        lines.append(
+            f"- tick={row.get('tick')} weapon={row.get('weapon')} "
+            f"user_velocity={row.get('user_velocity')} user_name={row.get('user_name')}"
+        )
+    lines.extend(["", "### İlk 5 player tick", ""])
+    for row in debug.get("tick_sample") or []:
+        lines.append(
+            f"- tick={row.get('tick')} velocity={row.get('velocity')} "
+            f"name={row.get('name')} steamid={row.get('steamid')}"
+        )
+    lines.extend([
+        "",
+        "## Eşleşme analizi",
+        "",
+        f"- Ortak kolonlar: `{', '.join(debug.get('common_keys') or []) or 'yok'}`",
+        f"- Shot eventlerinde tick var mı: {debug.get('tick_on_shots')}",
+        f"- Shot eventlerinde steamid var mı: {debug.get('steamid_on_shots')}",
+        "",
+        "### İlk 5 eşleşmiş shot",
+        "",
+    ])
+    for row in debug.get("matched_shot_sample") or []:
+        lines.append(
+            f"- tick={row.get('tick')} speed={row.get('matched_speed')} "
+            f"source={row.get('speed_source')} weapon={row.get('weapon')}"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def write_demo_debug_report(path: Path, debug: dict[str, Any]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_demo_debug_markdown(debug), encoding="utf-8")
+    return path
+
+
+def parse_demo_basic(
+    demo_path: str | Path,
+    nickname: str,
+    *,
+    debug: bool = False,
+) -> dict[str, Any]:
     """Tek bir .dem dosyasını güvenli şekilde parse eder."""
     path = Path(demo_path)
     base = {
@@ -472,7 +852,9 @@ def parse_demo_basic(demo_path: str | Path, nickname: str) -> dict[str, Any]:
 
         parser = DemoParser(str(path))
         player_info = parser.parse_player_info()
-        matched, matched_name, all_names = _resolve_player_names(player_info, nickname)
+        matched, matched_name, matched_steamid, all_names = _resolve_player_names(
+            player_info, nickname,
+        )
 
         death_df = None
         events = []
@@ -484,29 +866,35 @@ def parse_demo_basic(demo_path: str | Path, nickname: str) -> dict[str, Any]:
         if "player_death" in events:
             death_df = parser.parse_event(
                 "player_death",
-                player=["X", "Y"],
-                other=["weapon", "total_rounds_played"],
+                player=["X", "Y", "name", "steamid"],
+                other=["weapon", "total_rounds_played", "attacker_name"],
             )
 
         death_rows = _df_records(death_df)
         kd = extract_kill_death_events(death_rows, matched_name, nickname)
-        shots = extract_shot_events_if_available(parser, matched_name, nickname)
-        ticks = extract_player_ticks_if_available(parser, matched_name)
+        shots = extract_shot_events_if_available(
+            parser, matched_name, nickname, matched_steamid=matched_steamid,
+        )
+        ticks = extract_player_ticks_if_available(
+            parser, matched_name, matched_steamid=matched_steamid,
+        )
 
         mechanics: dict[str, Any] = {
             "reliable": False,
-            "note": "Bu demoda shot + velocity eşleşmesi güvenilir çıkarılamadı.",
+            "metrics_confidence": "none",
+            "note": "Shot event var ama player velocity alanı bulunamadı.",
         }
         if shots.get("available") and shots.get("rows"):
-            mechanics = _compute_shot_mechanics(shots["rows"])
+            mechanics = _compute_shot_mechanics(
+                shots["rows"],
+                tick_rows=ticks.get("rows") or [],
+            )
 
-        confidence = "none"
-        if matched and kd["kills"] + kd["deaths"] > 0:
+        confidence = mechanics.get("metrics_confidence", "none")
+        if matched and kd["kills"] + kd["deaths"] > 0 and confidence == "none":
             confidence = "low"
-        if mechanics.get("reliable"):
-            confidence = "medium"
 
-        return {
+        result = {
             **base,
             "status": "ok",
             "reason": "",
@@ -515,23 +903,34 @@ def parse_demo_basic(demo_path: str | Path, nickname: str) -> dict[str, Any]:
             "parser_status": "ok",
             "player_matched": matched,
             "matched_name": matched_name,
+            "matched_steamid": matched_steamid,
             "players_in_demo": all_names[:20],
             "kills": kd["kills"],
             "deaths": kd["deaths"],
             "weapons": kd["weapons"],
             "round_count": kd["round_count"],
+            "shot_count": shots.get("shot_count", 0),
+            "gun_shot_count": shots.get("gun_shot_count", 0),
+            "tick_count": ticks.get("tick_count", 0),
+            "velocity_ticks": ticks.get("velocity_ticks", 0),
             "tick_data_available": ticks.get("available", False),
             "tick_data_note": ticks.get("reason") or (
-                f"{ticks.get('tick_count', 0)} tick okundu." if ticks.get("available") else "veri yetersiz"
+                f"{ticks.get('tick_count', 0)} tick, {ticks.get('velocity_ticks', 0)} velocity'li."
+                if ticks.get("available") else "veri yetersiz"
             ),
             "shot_event_available": shots.get("available", False),
             "shot_event_note": shots.get("reason") or (
                 f"{shots.get('shot_count', 0)} shot event okundu."
                 if shots.get("available") else "veri yetersiz"
             ),
+            "velocity_fields_found": mechanics.get("velocity_fields_found", False),
+            "shots_with_velocity": mechanics.get("shots_with_velocity", 0),
             "mechanics": mechanics,
             "events_found": events[:15],
         }
+        if debug:
+            result["debug"] = collect_demo_debug_info(path, nickname)
+        return result
     except Exception as exc:
         return {
             **base,
@@ -604,11 +1003,16 @@ def build_mechanics_summary(
         "deaths": sum(d.get("deaths", 0) for d in ok_demos),
         "weapons": [],
         "round_count": None,
+        "shot_count": sum(d.get("shot_count", 0) for d in ok_demos),
+        "tick_count": sum(d.get("tick_count", 0) for d in ok_demos),
+        "shots_with_velocity": sum(d.get("shots_with_velocity", 0) for d in ok_demos),
+        "velocity_fields_found": any(d.get("velocity_fields_found") for d in ok_demos),
         "tick_data_available": any(d.get("tick_data_available") for d in ok_demos),
         "shot_event_available": any(d.get("shot_event_available") for d in ok_demos),
         "mechanics": {
             "reliable": False,
-            "note": "Bu demoda shot + velocity eşleşmesi güvenilir çıkarılamadı.",
+            "metrics_confidence": "none",
+            "note": "Shot event var ama player velocity alanı bulunamadı.",
         },
     }
 
@@ -619,20 +1023,27 @@ def build_mechanics_summary(
             return round(sum(vals) / len(vals), 1) if vals else MISSING_DATA_LABEL
 
         weapon_totals: dict[str, int] = {}
+        ak_totals: dict[str, int] = {}
         for m in reliable_mech:
             for w, c in (m.get("weapon_shot_counts") or {}).items():
                 weapon_totals[w] = weapon_totals.get(w, 0) + int(c)
+            for w, c in (m.get("ak_m4_shot_counts") or {}).items():
+                ak_totals[w] = ak_totals.get(w, 0) + int(c)
 
         aggregated["mechanics"] = {
             "reliable": True,
+            "metrics_confidence": reliable_mech[0].get("metrics_confidence", "medium"),
+            "shots_with_velocity": sum(m.get("shots_with_velocity", 0) for m in reliable_mech),
+            "total_shots": sum(m.get("total_shots", 0) for m in reliable_mech),
             "shots_while_moving_pct": _avg("shots_while_moving_pct"),
             "first_bullet_moving_pct": _avg("first_bullet_moving_pct"),
             "average_speed_at_shot": _avg("average_speed_at_shot"),
             "spray_length_average": _avg("spray_length_average"),
             "weapon_shot_counts": weapon_totals,
+            "ak_m4_shot_counts": ak_totals,
             "note": (
                 f"{len(reliable_mech)} demo üzerinden ön metrik ortalaması; "
-                "kesin counter-strafe/spray teşhisi için daha fazla doğrulama gerekir."
+                "demo parser ilk sürüm mekanik sinyali — kesin profesyonel analiz değildir."
             ),
         }
 
@@ -654,9 +1065,16 @@ def build_mechanics_summary(
 
     confidence = "none"
     if ok_demos:
-        confidence = "low"
-    if any(d.get("player_matched") for d in ok_demos):
-        confidence = "low" if not reliable_mech else "medium"
+        confs = [
+            d.get("mechanics", {}).get("metrics_confidence", "none")
+            for d in ok_demos
+        ]
+        if "medium" in confs:
+            confidence = "medium"
+        elif "low" in confs:
+            confidence = "low"
+        elif any(d.get("player_matched") for d in ok_demos):
+            confidence = "low"
 
     player_matched = any(d.get("player_matched") for d in ok_demos)
     matched_names = [d.get("matched_name") for d in ok_demos if d.get("matched_name")]

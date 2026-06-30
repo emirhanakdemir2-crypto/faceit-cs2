@@ -9,10 +9,18 @@ from src.demo_parser import (
     demoparser_available,
     parse_demo_basic,
     prepare_demos_for_parsing,
+    write_demo_debug_report,
 )
 
 
-def run_mechanics_lab(demo_folder: Path, nickname: str, *, max_demos: int = 5) -> dict[str, Any]:
+def run_mechanics_lab(
+    demo_folder: Path,
+    nickname: str,
+    *,
+    max_demos: int = 5,
+    debug_demo: bool = False,
+    debug_report_dir: Path | None = None,
+) -> dict[str, Any]:
     """Demo klasörünü tarar, sıkıştırılmış dosyaları çıkarır ve parse dener."""
     prep = prepare_demos_for_parsing(demo_folder)
     raw_files = prep.get("files") or []
@@ -21,13 +29,19 @@ def run_mechanics_lab(demo_folder: Path, nickname: str, *, max_demos: int = 5) -
         return build_mechanics_summary([], [], demo_folder=demo_folder, nickname=nickname)
 
     parsed: list[dict[str, Any]] = []
+    debug_paths: list[str] = []
     for entry in (prep.get("parseable") or [])[:max_demos]:
-        result = parse_demo_basic(entry["path"], nickname)
+        result = parse_demo_basic(entry["path"], nickname, debug=debug_demo)
         result["source_compressed"] = entry.get("source_compressed")
         result["extraction"] = entry.get("extraction")
         parsed.append(result)
+        if debug_demo and result.get("debug") and debug_report_dir is not None:
+            safe = nickname.lower()
+            debug_path = debug_report_dir / f"{safe}_demo_debug_latest.md"
+            write_demo_debug_report(debug_path, result["debug"])
+            debug_paths.append(str(debug_path.resolve()))
 
-    return build_mechanics_summary(
+    summary = build_mechanics_summary(
         raw_files,
         parsed,
         demo_folder=demo_folder,
@@ -35,6 +49,9 @@ def run_mechanics_lab(demo_folder: Path, nickname: str, *, max_demos: int = 5) -
         extractions=prep.get("extractions") or [],
         preparation=prep,
     )
+    if debug_paths:
+        summary["debug_report_paths"] = debug_paths
+    return summary
 
 
 def _fmt(value: Any) -> str:
@@ -120,10 +137,15 @@ def render_mechanics_lab_markdown(lab: dict[str, Any]) -> list[str]:
         f"* Death: {_fmt(agg.get('deaths'))}",
         f"* Silahlar: {_fmt(', '.join(agg.get('weapons') or []) or MISSING_DATA_LABEL)}",
         f"* Round sayısı: {_fmt(agg.get('round_count'))}",
+        f"* Shot event sayısı: {_fmt(agg.get('shot_count'))}",
+        f"* Player tick sayısı: {_fmt(agg.get('tick_count'))}",
         f"* Shot event çıktı mı: {_yes_no(agg.get('shot_event_available'))}",
         f"* Tick/velocity verisi çıktı mı: {_yes_no(agg.get('tick_data_available'))}",
+        f"* Velocity alanları bulundu mu: {_yes_no(agg.get('velocity_fields_found'))}",
+        f"* Eşleşen shot+velocity sayısı: {_fmt(agg.get('shots_with_velocity'))}",
         "",
         f"* Mekanik metrik üretildi mi: {_yes_no(lab.get('mechanics_produced'))}",
+        f"* Metrik güven seviyesi: {_fmt(mech.get('metrics_confidence', lab.get('confidence')))}",
         "",
     ])
 
@@ -150,6 +172,8 @@ def render_mechanics_lab_markdown(lab: dict[str, Any]) -> list[str]:
     lines.extend(["### Counter-strafe / Spray Ön Metrikleri", ""])
     if mech.get("reliable"):
         lines.extend([
+            f"* Total shots (gun): {_fmt(mech.get('total_shots'))}",
+            f"* Shots with velocity: {_fmt(mech.get('shots_with_velocity'))}",
             f"* Shots while moving %: {_fmt(mech.get('shots_while_moving_pct'))}",
             f"* First bullet moving %: {_fmt(mech.get('first_bullet_moving_pct'))}",
             f"* Average speed at shot: {_fmt(mech.get('average_speed_at_shot'))}",
@@ -163,12 +187,30 @@ def render_mechanics_lab_markdown(lab: dict[str, Any]) -> list[str]:
             key=lambda x: -x[1],
         )[:12]:
             lines.append(f"- {weapon}: {count}")
+        ak_m4 = mech.get("ak_m4_shot_counts") or {}
+        if ak_m4:
+            lines.extend(["", "**AK/M4 shot counts:**", ""])
+            for weapon, count in sorted(ak_m4.items(), key=lambda x: -x[1]):
+                lines.append(f"- {weapon}: {count}")
         lines.append("")
         if mech.get("note"):
             lines.append(f"_{mech['note']}_")
             lines.append("")
     else:
-        lines.append(f"_{mech.get('note', 'Bu demoda shot + velocity eşleşmesi güvenilir çıkarılamadı.')}_")
+        note = mech.get(
+            "note",
+            "Shot event var ama player velocity alanı bulunamadı veya eşleşmedi.",
+        )
+        lines.append(f"_{note}_")
+        lines.append("")
+
+    if lab.get("debug_report_paths"):
+        lines.extend([
+            "### Debug Raporu",
+            "",
+        ])
+        for p in lab["debug_report_paths"]:
+            lines.append(f"- `{p}`")
         lines.append("")
 
     lines.extend(_warning_block())

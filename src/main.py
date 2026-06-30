@@ -84,6 +84,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--mechanics", action="store_true",
         help="Demo parser ile mekanik analiz (opsiyonel, demoparser2)",
     )
+    parser.add_argument(
+        "--debug-demo", action="store_true",
+        help="Demo parser debug raporu (data/reports/)",
+    )
     return parser.parse_args(argv)
 
 
@@ -152,6 +156,8 @@ def main(argv: list[str] | None = None) -> int:
         console.print("AI export: [green]açık[/green]")
     if args.mechanics:
         console.print("Mechanics Lab: [green]açık[/green]")
+    if args.debug_demo:
+        console.print("Demo debug: [green]açık[/green]")
     console.print()
 
     known_before = get_known_match_ids(nickname)
@@ -240,7 +246,12 @@ def main(argv: list[str] | None = None) -> int:
 
     mechanics_lab: dict[str, Any] | None = None
     if args.mechanics:
-        mechanics_lab = run_mechanics_lab(demo_folder, nickname)
+        mechanics_lab = run_mechanics_lab(
+            demo_folder,
+            nickname,
+            debug_demo=args.debug_demo,
+            debug_report_dir=REPORTS_DIR,
+        )
 
     safe_name = nickname.lower()
     if args.post_session:
@@ -363,6 +374,8 @@ def main(argv: list[str] | None = None) -> int:
     if mechanics_lab:
         panel["Mechanics Lab"] = mechanics_lab.get("status", "—")
         panel["Demo güven"] = mechanics_lab.get("confidence", "—")
+        if mechanics_lab.get("debug_report_paths"):
+            panel["Debug rapor"] = mechanics_lab["debug_report_paths"][0]
     if demo_analysis.get("found"):
         panel["Demo dosyası"] = len(demo_analysis.get("files") or [])
 
