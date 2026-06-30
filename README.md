@@ -78,7 +78,7 @@ python -m src.main --nickname Jurses
 
 python -m src.main --nickname Jurses --days 90 --matches 120
 python -m src.main --nickname Jurses --days 90 --matches 120 --export-ai-prompt
-python -m src.main --nickname Jurses --demo-folder data/demos
+python -m src.main --nickname Jurses --demo-folder data/demos --mechanics
 python -m src.main --nickname Jurses --ai
 ```
 
@@ -90,6 +90,7 @@ python -m src.main --nickname Jurses --ai
 | `--post-session` | kapalı | Maç sonrası koçluk raporu |
 | `--export-ai-prompt` | kapalı | `data/ai_exports/` belgesi |
 | `--demo-folder` | `data/demos` | Manuel demo klasörü |
+| `--mechanics` | kapalı | Demo parser mekanik analizi |
 | `--ai` | kapalı | Gemini API yorumu |
 
 ## Rapor yapısı
@@ -124,13 +125,68 @@ python -m src.main --nickname Jurses --ai
 
 Ham FACEIT JSON yok; temiz metrikler ChatGPT/Gemini/Claude'a yapıştırılabilir.
 
-## Demo klasörü
+## Demo klasörü ve Mechanics Lab
+
+Demo parser **opsiyoneldir**. Normal FACEIT analizi demo olmadan veya `demoparser2` kurulu olmadan çalışır.
+
+### FACEIT demosu nasıl indirilir?
+
+1. [FACEIT](https://www.faceit.com) → Maç geçmişi → ilgili maç
+2. **Watch demo** / demo indirme bağlantısı (FACEIT arayüzüne göre değişebilir)
+3. İndirilen dosyayı `data/demos/` klasörüne koyun
+
+### Demo dosyası nereye konur?
+
+```
+data/demos/
+  match_1-xxxxxxxx.dem
+```
+
+Desteklenen uzantılar: `.dem`, `.dem.gz`, `.dem.zst`
+
+`.gitignore` içinde `data/demos/` zaten hariç tutulur.
+
+### Sıkıştırılmış demo (.dem.gz / .dem.zst)
+
+İlk sürüm sıkıştırılmış dosyaları **otomatik açmaz**. Önce `.dem` olarak çıkarın; aksi halde raporda şu uyarı görünür:
+
+> Sıkıştırılmış demo bulundu; önce .dem olarak çıkarılmalı.
+
+### Mechanics Lab kullanımı
+
+```powershell
+# Opsiyonel parser kurulumu
+pip install demoparser2
+
+# Demo klasörü tarama + mekanik analiz
+python -m src.main --nickname Jurses --demo-folder data/demos --mechanics
+```
+
+`--mechanics` olmadan `--demo-folder` yalnızca dosya listesini raporlar.
+
+### Desteklenen ön metrikler (güvenilir veri varsa)
+
+| Metrik | Açıklama |
+| --- | --- |
+| `shots_while_moving_pct` | Hareket halinde atılan mermi oranı |
+| `first_bullet_moving_pct` | Burst'in ilk mermisi hareket halinde mi |
+| `average_speed_at_shot` | Atış anı ortalama hız |
+| `spray_length_average` | Ardışık atış burst uzunluğu ortalaması |
+| `weapon_shot_counts` | Silah bazlı atış sayıları |
+
+### Güven sınırlaması
+
+- İlk sürüm **kesin counter-strafe/spray teşhisi vermez**
+- Shot + velocity eşleşmesi yetersizse metrik üretilmez; raporda **“veri yetersiz”** yazar
+- Daha fazla demo ve event doğrulaması gerekir
+
+## Demo klasörü (hızlı)
 
 1. FACEIT'ten demo dosyalarını manuel indirin
-2. `data/demos/` içine koyun (`.dem`, `.dem.gz`, `.dem.zst`)
-3. `--demo-folder data/demos` ile tarayın
+2. `data/demos/` içine koyun (`.dem` tercih edilir)
+3. `--demo-folder data/demos --mechanics` ile analiz edin
 
-`demoparser2` kurulu değilse normal analiz çalışır; raporda kurulum notu görünür.
+`demoparser2` kurulu değilse normal analiz çalışır; `--mechanics` raporda kurulum notu gösterir.
 
 ## Güvenlik
 
@@ -152,7 +208,9 @@ API anahtarları koda veya rapora yazılmaz.
 src/
   session_coach.py     # Baseline vs recent form, risk score, queue kararı
   period_analysis.py   # 30 günlük dilim kıyası
-  demo_analyzer.py     # Demo tarama + mekanik iskelet
+  demo_parser.py       # demoparser2 entegrasyonu (opsiyonel)
+  mechanics_lab.py     # Demo mekanik rapor bölümü
+  demo_analyzer.py     # Demo klasör tarama
   ai_export.py         # AI export belgesi
   storage.py           # SQLite hafıza (dönemsel)
   ...

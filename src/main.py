@@ -25,6 +25,7 @@ from src.config import (
     get_api_key,
 )
 from src.demo_analyzer import scan_demo_folder
+from src.mechanics_lab import render_mechanics_lab_markdown, run_mechanics_lab
 from src.faceit_client import FaceitClient
 from src.gemini_client import generate_coaching_comment
 from src.metrics import (
@@ -78,6 +79,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--demo-folder", type=str, default=None,
         help="Manuel demo klasörü (örn. data/demos)",
+    )
+    parser.add_argument(
+        "--mechanics", action="store_true",
+        help="Demo parser ile mekanik analiz (opsiyonel, demoparser2)",
     )
     return parser.parse_args(argv)
 
@@ -145,6 +150,8 @@ def main(argv: list[str] | None = None) -> int:
         console.print("Gemini AI: [green]açık[/green]")
     if args.export_ai_prompt:
         console.print("AI export: [green]açık[/green]")
+    if args.mechanics:
+        console.print("Mechanics Lab: [green]açık[/green]")
     console.print()
 
     known_before = get_known_match_ids(nickname)
@@ -231,6 +238,10 @@ def main(argv: list[str] | None = None) -> int:
     known_ids = {m.get("match_id") for m in matches if m.get("match_id")}
     demo_analysis = scan_demo_folder(demo_folder, known_match_ids=known_ids)
 
+    mechanics_lab: dict[str, Any] | None = None
+    if args.mechanics:
+        mechanics_lab = run_mechanics_lab(demo_folder, nickname)
+
     safe_name = nickname.lower()
     if args.post_session:
         report_path = REPORTS_DIR / f"{safe_name}_session_latest.md"
@@ -285,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
         "coaching_draft": coaching,
         "memory": memory,
         "demo_analysis": demo_analysis,
+        "mechanics_lab": mechanics_lab,
         "session_coach": session_coach,
         "analysis_window": normalized.get("analysis_window"),
         "matches": matches,
@@ -321,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
         persistent_problems=persistent_problems,
         new_matches_baseline=new_matches_baseline,
         demo_analysis=demo_analysis,
+        mechanics_lab=mechanics_lab,
         ai_enabled=args.ai,
         ai_comment=ai_comment,
         ai_export_path=str(ai_export_path) if ai_export_path else None,
@@ -347,6 +360,9 @@ def main(argv: list[str] | None = None) -> int:
         panel["Önceki analiz"] = memory.get("previous_analysis_date") or "—"
     if ai_export_path:
         panel["AI export"] = ai_export_path.resolve()
+    if mechanics_lab:
+        panel["Mechanics Lab"] = mechanics_lab.get("status", "—")
+        panel["Demo güven"] = mechanics_lab.get("confidence", "—")
     if demo_analysis.get("found"):
         panel["Demo dosyası"] = len(demo_analysis.get("files") or [])
 

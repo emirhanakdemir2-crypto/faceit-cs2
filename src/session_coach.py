@@ -377,6 +377,9 @@ Maç sonrası 1 round veya kritik death için doldur.
 | Taraf | CT / T |
 | Round | |
 | Skor | |
+| Demo dosyası | |
+| Tick/zaman | |
+| Klip linki | |
 | Ben ne yapmaya çalıştım? | |
 | Takım bana ne dedi? | |
 | Pozisyon kararı doğru muydu? | Evet / Hayır — neden? |

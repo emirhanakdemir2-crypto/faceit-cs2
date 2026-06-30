@@ -3,4 +3,5 @@ python-dotenv>=1.0.0
 pandas>=2.1.0
 rich>=13.7.0
 google-genai>=1.0.0
+# Opsiyonel — demo mekanik analizi için: pip install demoparser2
 demoparser2>=0.36.0

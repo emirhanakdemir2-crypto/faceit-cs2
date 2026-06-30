@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from src.config import MISSING_DATA_LABEL
+from src.mechanics_lab import render_mechanics_lab_markdown
 
 
 def _fmt(value: Any) -> str:
@@ -180,6 +181,7 @@ def write_markdown_report(
     persistent_problems: list[str] | None = None,
     new_matches_baseline: dict[str, Any] | None = None,
     demo_analysis: dict[str, Any] | None = None,
+    mechanics_lab: dict[str, Any] | None = None,
     ai_enabled: bool = False,
     ai_comment: str | None = None,
     ai_export_path: str | None = None,
@@ -340,29 +342,36 @@ def write_markdown_report(
         lines.append(f"_{_fmt(demo_analysis.get('message', 'Demo klasörü taranmadı.'))}_")
         lines.append("")
         if demo_analysis.get("files"):
-            lines.append("| Dosya | match_id | Boyut (MB) |")
-            lines.append("| --- | --- | --- |")
+            lines.append("| Dosya | match_id | Boyut (MB) | Parse |")
+            lines.append("| --- | --- | --- | --- |")
             for f in demo_analysis.get("files") or []:
+                parse_flag = "evet" if f.get("parseable") else (
+                    "sıkıştırılmış" if f.get("compressed") else "hayır"
+                )
                 lines.append(
-                    f"| {_fmt(f.get('filename'))} | {_fmt(f.get('match_id'))} | {_fmt(f.get('size_mb'))} |"
+                    f"| {_fmt(f.get('filename'))} | {_fmt(f.get('match_id'))} | "
+                    f"{_fmt(f.get('size_mb'))} | {parse_flag} |"
                 )
             lines.append("")
-        mech = demo_analysis.get("mechanics") or {}
-        if mech.get("note"):
-            lines.append(f"*{mech['note']}*")
+        if not mechanics_lab:
+            lines.append(
+                "_Detaylı mekanik analiz için `--mechanics` parametresiyle çalıştırın._"
+            )
             lines.append("")
 
-    lines.extend(["## Mekanik Analiz Hedef Metrikleri", ""])
-    lines.append("_Counter-strafe ve spray FACEIT API'den alınamaz; demo gerekir._")
-    lines.append("")
-    lines.append("| Metrik | Değer | Kaynak |")
-    lines.append("| --- | --- | --- |")
-    mech = demo_analysis.get("mechanics") or {}
-    for tm in demo_analysis.get("target_metrics") or []:
-        key = tm.get("key", "")
-        val = mech.get(key, tm.get("value", MISSING_DATA_LABEL))
-        lines.append(f"| {tm.get('label')} | {_fmt(val)} | {tm.get('source')} |")
-    lines.append("")
+    if mechanics_lab:
+        lines.extend(render_mechanics_lab_markdown(mechanics_lab))
+    else:
+        lines.extend(["## Mekanik Analiz Hedef Metrikleri", ""])
+        lines.append("_Counter-strafe ve spray FACEIT API'den alınamaz; demo + --mechanics gerekir._")
+        lines.append("")
+        lines.append("| Metrik | Değer | Kaynak |")
+        lines.append("| --- | --- | --- |")
+        for tm in demo_analysis.get("target_metrics") or []:
+            lines.append(
+                f"| {tm.get('label')} | {_fmt(tm.get('value'))} | {tm.get('source')} |"
+            )
+        lines.append("")
 
     lines.extend(["## AI Export Belgesi", ""])
     if ai_export_path:
