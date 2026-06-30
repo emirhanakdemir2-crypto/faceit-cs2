@@ -42,6 +42,129 @@ def _summary_table(summary: dict[str, Any], title: str) -> list[str]:
     return lines
 
 
+def _render_session_coach_sections(session: dict[str, Any]) -> list[str]:
+    baseline = session.get("baseline_summary") or {}
+    baseline_maps = session.get("baseline_map_stats") or {}
+    recent = session.get("recent_form") or {}
+    comparison = session.get("comparison") or {}
+    risk = session.get("focus_risk") or {}
+    recent_count = session.get("recent_count", 10)
+    days = session.get("days", 90)
+
+    lines: list[str] = [
+        "## Session Coach — Son Maç Gelişim Takibi",
+        "",
+        f"_90 gün baseline vs son {recent_count} maç formu._",
+        "",
+        f"## {days} Günlük Baseline",
+        "",
+        "| Metrik | Değer |",
+        "| --- | --- |",
+        f"| Win rate | {_fmt(baseline.get('win_rate_pct'))}% |",
+        f"| K/D | {_fmt(baseline.get('avg_kd_ratio'))} |",
+        f"| ADR | {_fmt(baseline.get('avg_adr'))} |",
+        f"| HS% | {_fmt(baseline.get('avg_headshot_pct'))} |",
+        "",
+        f"**Güçlü harita:** {_fmt(baseline_maps.get('best_map'))}  ",
+        f"**Zayıf harita:** {_fmt(baseline_maps.get('worst_map'))}",
+        "",
+        "| Harita | Oynanan | G | M | Kazanma % |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for row in baseline_maps.get("maps") or []:
+        lines.append(
+            f"| {_fmt(row.get('map'))} | {_fmt(row.get('played'))} | "
+            f"{_fmt(row.get('wins'))} | {_fmt(row.get('losses'))} | "
+            f"{_fmt(row.get('win_rate_pct'))} |"
+        )
+    lines.append("")
+
+    lines.extend([
+        f"## Son {recent_count} Maç Formu",
+        "",
+        f"| Metrik | Değer |",
+        "| --- | --- |",
+        f"| Win rate | {_fmt(recent.get('win_rate_pct'))}% |",
+        f"| K/D | {_fmt(recent.get('avg_kd_ratio'))} |",
+        f"| ADR | {_fmt(recent.get('avg_adr'))} |",
+        f"| HS% | {_fmt(recent.get('avg_headshot_pct'))} |",
+        f"| Skor | {_fmt(recent.get('record'))} |",
+        f"| Win streak | {_fmt(recent.get('current_win_streak'))} |",
+        f"| Loss streak | {_fmt(recent.get('current_loss_streak'))} |",
+        f"| En iyi maç | {_fmt(recent.get('best_match'))} |",
+        f"| En kötü maç | {_fmt(recent.get('worst_match'))} |",
+        "",
+        "**Harita dağılımı:**",
+        "",
+    ])
+    for row in recent.get("map_distribution") or []:
+        lines.append(f"- {_fmt(row.get('map'))}: {row.get('played')} maç")
+    lines.append("")
+
+    high_adr = recent.get("high_adr_losses") or []
+    if high_adr:
+        lines.append("**Yüksek ADR + loss maçları:**")
+        lines.append("")
+        for item in high_adr:
+            lines.append(f"- {item}")
+        lines.append("")
+
+    lines.extend([
+        "## Baseline'a Göre Değişim",
+        "",
+        "| Metrik | 90g Baseline | Son form | Fark |",
+        "| --- | --- | --- | --- |",
+    ])
+    for row in comparison.get("comparisons") or []:
+        delta = row.get("delta")
+        delta_str = f"+{delta}" if isinstance(delta, (int, float)) and delta > 0 else _fmt(delta)
+        lines.append(
+            f"| {row.get('metric')} | {_fmt(row.get('baseline'))} | "
+            f"{_fmt(row.get('recent'))} | {delta_str} |"
+        )
+    lines.append("")
+    for mc in comparison.get("map_comparisons") or []:
+        lines.append(f"- {mc}")
+    if comparison.get("map_comparisons"):
+        lines.append("")
+    lines.append("**Yorum:**")
+    lines.append("")
+    for note in comparison.get("commentary") or []:
+        lines.append(f"- {note}")
+    lines.append("")
+
+    lines.extend([
+        "## Focus Risk Score",
+        "",
+        f"**Skor: {risk.get('score', 0)}/100** — {_fmt(risk.get('band'))}",
+        "",
+        "**Risk faktörleri:**",
+        "",
+    ])
+    for factor in risk.get("factors") or []:
+        lines.append(f"- {factor}")
+    lines.append("")
+    lines.extend([
+        "## Bugünkü Queue Kararı",
+        "",
+        f"**{_fmt(risk.get('queue_decision'))}**",
+        "",
+        "## Sonraki Maç İçin Tek Odak",
+        "",
+        f"**{_fmt(session.get('next_match_focus'))}**",
+        "",
+        "## Mental / Toxicity Notları",
+        "",
+    ])
+    for note in session.get("mental_notes") or []:
+        if note.startswith("- "):
+            lines.append(note)
+        else:
+            lines.append(f"- {note}")
+    lines.append("")
+    return lines
+
+
 def write_markdown_report(
     normalized: dict[str, Any],
     summary: dict[str, Any],
@@ -60,6 +183,8 @@ def write_markdown_report(
     ai_enabled: bool = False,
     ai_comment: str | None = None,
     ai_export_path: str | None = None,
+    session_coach: dict[str, Any] | None = None,
+    session_only: bool = False,
 ) -> str:
     profile = normalized.get("profile") or {}
     matches = normalized.get("matches") or []
@@ -79,8 +204,13 @@ def write_markdown_report(
     demo_analysis = demo_analysis or {}
     missing_fields = missing_fields or []
 
+    title = (
+        f"# Session Coach — {_fmt(nickname)}"
+        if session_only
+        else f"# FACEIT CS2 Gelişim Raporu — {_fmt(nickname)}"
+    )
     lines: list[str] = [
-        f"# FACEIT CS2 Gelişim Raporu — {_fmt(nickname)}",
+        title,
         "",
         f"*Oluşturulma: {normalized.get('generated_at', MISSING_DATA_LABEL)}*",
         f"*Analiz penceresi: son {days} gün / {summary.get('total_matches', len(matches))} maç*",
@@ -95,11 +225,26 @@ def write_markdown_report(
         f"| FACEIT ELO | {_fmt(profile.get('faceit_elo'))} |",
         f"| Profil | {_fmt(profile.get('faceit_url'))} |",
         "",
+    ]
+
+    if session_coach:
+        lines.extend(_render_session_coach_sections(session_coach))
+
+    if session_only:
+        lines.extend([
+            "---",
+            "",
+            "*Session Coach — faceit-cs2-coach*",
+            "",
+        ])
+        return "\n".join(lines)
+
+    lines.extend([
         "## Veri Güveni",
         "",
         f"**Seviye: {_fmt(confidence.get('level'))}** — {_fmt(confidence.get('detail'))}",
         "",
-    ]
+    ])
     for note in confidence.get("notes") or []:
         lines.append(f"- {note}")
     lines.append("")
