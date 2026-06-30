@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import gzip
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +53,75 @@ def _extract_match_id(filename: str) -> str | None:
     return match.group(0) if match else None
 
 
+def _is_native_dem(filename: str) -> bool:
+    name = filename.lower()
+    return name.endswith(".dem") and not name.endswith(".dem.gz") and not name.endswith(".dem.zst")
+
+
+def _decompressed_dem_path(compressed_path: Path) -> Path:
+    name = compressed_path.name
+    lower = name.lower()
+    if lower.endswith(".dem.zst"):
+        return compressed_path.with_name(name[:-4])
+    if lower.endswith(".dem.gz"):
+        return compressed_path.with_name(name[:-3])
+    return compressed_path
+
+
+def extract_compressed_demo(compressed_path: Path) -> dict[str, Any]:
+    """Sıkıştırılmış .dem.zst / .dem.gz dosyasını aynı klasöre .dem olarak çıkarır."""
+    result: dict[str, Any] = {
+        "source": compressed_path.name,
+        "source_path": str(compressed_path.resolve()),
+        "output": "",
+        "output_path": "",
+        "extracted": False,
+        "skipped_existing": False,
+        "error": "",
+    }
+
+    if not compressed_path.exists():
+        result["error"] = "Sıkıştırılmış demo dosyası bulunamadı."
+        return result
+
+    out_path = _decompressed_dem_path(compressed_path)
+    result["output"] = out_path.name
+    result["output_path"] = str(out_path.resolve())
+
+    if out_path.exists():
+        result["skipped_existing"] = True
+        result["extracted"] = True
+        return result
+
+    name_lower = compressed_path.name.lower()
+    try:
+        if name_lower.endswith(".dem.zst"):
+            try:
+                import zstandard as zstd
+            except ImportError:
+                result["error"] = "zstandard kurulu değil. pip install zstandard"
+                return result
+            dctx = zstd.ZstdDecompressor()
+            with compressed_path.open("rb") as f_in, out_path.open("wb") as f_out:
+                dctx.copy_stream(f_in, f_out)
+        elif name_lower.endswith(".dem.gz"):
+            with gzip.open(compressed_path, "rb") as f_in, out_path.open("wb") as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        else:
+            result["error"] = "Desteklenmeyen sıkıştırma formatı."
+            return result
+        result["extracted"] = True
+    except Exception as exc:
+        result["error"] = f"Çıkarma hatası: {exc}"
+        if out_path.exists():
+            try:
+                out_path.unlink()
+            except OSError:
+                pass
+
+    return result
+
+
 def find_demo_files(demo_folder: Path) -> list[dict[str, Any]]:
     """Demo klasöründeki .dem / .dem.gz / .dem.zst dosyalarını listeler."""
     if not demo_folder.exists():
@@ -70,9 +141,58 @@ def find_demo_files(demo_folder: Path) -> list[dict[str, Any]]:
             "size_mb": round(path.stat().st_size / (1024 * 1024), 2),
             "match_id": _extract_match_id(path.name) or MISSING_DATA_LABEL,
             "compressed": compressed,
-            "parseable": name_lower.endswith(".dem") and not compressed,
+            "parseable": _is_native_dem(path.name),
         })
     return files
+
+
+def prepare_demos_for_parsing(demo_folder: Path) -> dict[str, Any]:
+    """Sıkıştırılmış demoları çıkarır ve parse edilebilir .dem listesi üretir."""
+    raw_files = find_demo_files(demo_folder)
+    extractions: list[dict[str, Any]] = []
+    parseable: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+
+    for entry in raw_files:
+        if not entry.get("parseable"):
+            continue
+        path = entry["path"]
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
+        parseable.append({**entry, "source_compressed": None, "extraction": None})
+
+    for entry in raw_files:
+        if not entry.get("compressed"):
+            continue
+        extraction = extract_compressed_demo(Path(entry["path"]))
+        extractions.append(extraction)
+        if not extraction.get("extracted") or extraction.get("error"):
+            continue
+        out_path = Path(extraction["output_path"])
+        if not out_path.exists():
+            continue
+        out_str = str(out_path.resolve())
+        if out_str in seen_paths:
+            continue
+        seen_paths.add(out_str)
+        parseable.append({
+            "filename": out_path.name,
+            "path": out_str,
+            "size_mb": round(out_path.stat().st_size / (1024 * 1024), 2),
+            "match_id": _extract_match_id(out_path.name) or MISSING_DATA_LABEL,
+            "compressed": False,
+            "parseable": True,
+            "source_compressed": entry["filename"],
+            "extraction": extraction,
+        })
+
+    return {
+        "files": raw_files,
+        "parseable": parseable,
+        "extractions": extractions,
+        "compressed_found": any(f.get("compressed") for f in raw_files),
+    }
 
 
 def _resolve_player_names(player_info: Any, nickname: str) -> tuple[bool, str | None, list[str]]:
@@ -340,7 +460,7 @@ def parse_demo_basic(demo_path: str | Path, nickname: str) -> dict[str, Any]:
         return {
             **base,
             **_unavailable(
-                "Sıkıştırılmış demo bulundu; önce .dem olarak çıkarılmalı."
+                "Sıkıştırılmış demo doğrudan parse edilemez; prepare_demos_for_parsing kullanın."
             ),
         }
 
@@ -426,12 +546,20 @@ def build_mechanics_summary(
     *,
     demo_folder: Path,
     nickname: str,
+    extractions: list[dict[str, Any]] | None = None,
+    preparation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Birden fazla demo parse sonucunu özetler."""
+    extractions = extractions or []
+    preparation = preparation or {}
     parseable = [f for f in demo_files if f.get("parseable")]
+    if preparation.get("parseable"):
+        parseable = preparation["parseable"]
     compressed = [f for f in demo_files if f.get("compressed")]
     ok_demos = [p for p in parsed_demos if p.get("status") == "ok"]
     unavailable_demos = [p for p in parsed_demos if p.get("status") == "unavailable"]
+    parser_attempted = len(parsed_demos) > 0
+    mechanics_produced = any(d.get("mechanics", {}).get("reliable") for d in ok_demos)
 
     if not demo_files:
         return {
@@ -445,14 +573,31 @@ def build_mechanics_summary(
             "found_count": 0,
             "parsed_count": 0,
             "compressed_count": 0,
+            "compressed_found": False,
             "compressed_note": "",
+            "extractions": [],
+            "parser_attempted": False,
+            "parser_result": "denenmedi",
+            "mechanics_produced": False,
             "demos": [],
             "aggregated": {},
         }
 
+    extracted_ok = [e for e in extractions if e.get("extracted") and not e.get("error")]
+    extraction_failed = [e for e in extractions if e.get("error")]
+
     compressed_note = ""
-    if compressed and not parseable:
-        compressed_note = "Sıkıştırılmış demo bulundu; önce .dem olarak çıkarılmalı."
+    if compressed:
+        if extracted_ok:
+            names = ", ".join(e.get("output", "?") for e in extracted_ok)
+            compressed_note = f"Sıkıştırılmış demo bulundu ve .dem olarak hazırlandı: {names}"
+        elif extraction_failed:
+            compressed_note = (
+                f"Sıkıştırılmış demo bulundu ancak çıkarılamadı: "
+                f"{extraction_failed[0].get('error', 'bilinmeyen hata')}"
+            )
+        elif not parseable:
+            compressed_note = "Sıkıştırılmış demo bulundu; çıkarma başarısız veya .dem oluşmadı."
 
     aggregated: dict[str, Any] = {
         "kills": sum(d.get("kills", 0) for d in ok_demos),
@@ -519,14 +664,20 @@ def build_mechanics_summary(
     status = "ok" if ok_demos else "unavailable"
     reason = ""
     if not ok_demos:
-        if compressed_note:
-            reason = compressed_note
+        if extraction_failed and not parseable:
+            reason = extraction_failed[0].get("error", "Demo çıkarılamadı.")
         elif unavailable_demos:
             reason = unavailable_demos[0].get("reason", "Demo okunamadı.")
         elif not demoparser_available():
             reason = "demoparser2 kurulu değil."
-        else:
+        elif not parseable:
             reason = "Parse edilebilir demo yok."
+        else:
+            reason = "Parser denemesi başarısız."
+
+    parser_result = "başarılı" if ok_demos else (
+        "başarısız" if parser_attempted else "denenmedi"
+    )
 
     return {
         "status": status,
@@ -539,7 +690,12 @@ def build_mechanics_summary(
         "found_count": len(demo_files),
         "parsed_count": len(ok_demos),
         "compressed_count": len(compressed),
+        "compressed_found": bool(compressed),
         "compressed_note": compressed_note,
+        "extractions": extractions,
+        "parser_attempted": parser_attempted,
+        "parser_result": parser_result,
+        "mechanics_produced": mechanics_produced,
         "player_matched": player_matched,
         "matched_name": matched_names[0] if matched_names else None,
         "demos": parsed_demos,

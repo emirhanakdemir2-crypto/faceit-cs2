@@ -59,7 +59,7 @@ def scan_demo_folder(folder: Path, known_match_ids: set[str] | None = None) -> d
     if not files:
         message = "Demo klasörü boş."
     elif compressed and not any(f.get("parseable") for f in files):
-        message += " Sıkıştırılmış demo bulundu; önce .dem olarak çıkarılmalı."
+        message += " Sıkıştırılmış demo bulundu; --mechanics ile otomatik .dem çıkarılır."
     elif files and not demoparser_available():
         message += " Mekanik analiz için: pip install demoparser2 ve --mechanics kullanın."
 

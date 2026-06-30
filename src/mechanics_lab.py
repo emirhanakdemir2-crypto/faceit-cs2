@@ -7,43 +7,48 @@ from src.config import MISSING_DATA_LABEL
 from src.demo_parser import (
     build_mechanics_summary,
     demoparser_available,
-    find_demo_files,
     parse_demo_basic,
+    prepare_demos_for_parsing,
 )
 
 
 def run_mechanics_lab(demo_folder: Path, nickname: str, *, max_demos: int = 5) -> dict[str, Any]:
-    """Demo klasörünü tarar ve opsiyonel parser ile mekanik özet üretir."""
-    files = find_demo_files(demo_folder)
-    if not files:
+    """Demo klasörünü tarar, sıkıştırılmış dosyaları çıkarır ve parse dener."""
+    prep = prepare_demos_for_parsing(demo_folder)
+    raw_files = prep.get("files") or []
+
+    if not raw_files:
         return build_mechanics_summary([], [], demo_folder=demo_folder, nickname=nickname)
 
-    parseable = [f for f in files if f.get("parseable")]
     parsed: list[dict[str, Any]] = []
+    for entry in (prep.get("parseable") or [])[:max_demos]:
+        result = parse_demo_basic(entry["path"], nickname)
+        result["source_compressed"] = entry.get("source_compressed")
+        result["extraction"] = entry.get("extraction")
+        parsed.append(result)
 
-    for entry in parseable[:max_demos]:
-        parsed.append(parse_demo_basic(entry["path"], nickname))
-
-    for entry in files:
-        if entry.get("compressed"):
-            parsed.append({
-                "demo_file": entry["filename"],
-                "demo_path": entry["path"],
-                "parser": "demoparser2" if demoparser_available() else "none",
-                "status": "unavailable",
-                "reason": "Sıkıştırılmış demo bulundu; önce .dem olarak çıkarılmalı.",
-                "demo_count": 0,
-                "confidence": "none",
-                "parser_status": "skipped",
-            })
-
-    return build_mechanics_summary(files, parsed, demo_folder=demo_folder, nickname=nickname)
+    return build_mechanics_summary(
+        raw_files,
+        parsed,
+        demo_folder=demo_folder,
+        nickname=nickname,
+        extractions=prep.get("extractions") or [],
+        preparation=prep,
+    )
 
 
 def _fmt(value: Any) -> str:
     if value is None or value == "":
         return MISSING_DATA_LABEL
     return str(value)
+
+
+def _yes_no(flag: bool | None) -> str:
+    if flag is True:
+        return "Evet"
+    if flag is False:
+        return "Hayır"
+    return MISSING_DATA_LABEL
 
 
 def render_mechanics_lab_markdown(lab: dict[str, Any]) -> list[str]:
@@ -61,7 +66,35 @@ def render_mechanics_lab_markdown(lab: dict[str, Any]) -> list[str]:
         f"* Parser: {_fmt(lab.get('parser'))}",
         f"* Güven seviyesi: {_fmt(lab.get('confidence'))}",
         "",
+        "### Sıkıştırma ve Çıkarma",
+        "",
+        f"* Sıkıştırılmış demo bulundu mu: {_yes_no(lab.get('compressed_found'))}",
     ]
+
+    extractions = lab.get("extractions") or []
+    if extractions:
+        for ext in extractions:
+            extracted = ext.get("extracted") and not ext.get("error")
+            lines.extend([
+                f"* Kaynak: `{_fmt(ext.get('source'))}`",
+                f"* .dem olarak çıkarıldı mı: {_yes_no(extracted)}",
+                f"* Çıkarılan dosya yolu: `{_fmt(ext.get('output_path'))}`",
+            ])
+            if ext.get("skipped_existing"):
+                lines.append("* Not: .dem zaten vardı, tekrar çıkarılmadı.")
+            if ext.get("error"):
+                lines.append(f"* Çıkarma hatası: {_fmt(ext['error'])}")
+    else:
+        lines.append("* Sıkıştırılmış dosya yok veya çıkarma denenmedi.")
+
+    lines.extend([
+        "",
+        "### Parser Denemesi",
+        "",
+        f"* Parser denendi mi: {_yes_no(lab.get('parser_attempted'))}",
+        f"* Parser sonucu: {_fmt(lab.get('parser_result'))}",
+        "",
+    ])
 
     if lab.get("compressed_note"):
         lines.append(f"_{lab['compressed_note']}_")
@@ -77,17 +110,20 @@ def render_mechanics_lab_markdown(lab: dict[str, Any]) -> list[str]:
         "### Oyuncu Eşleşmesi",
         "",
         f"* Nickname: {_fmt(lab.get('nickname'))}",
-        f"* Demo içinde eşleşme: {'Evet' if lab.get('player_matched') else 'Hayır'}",
+        f"* Demo içinde eşleşme: {_yes_no(lab.get('player_matched'))}",
         f"* Not: {_fmt(lab.get('matched_name') or 'Oyuncu adı demo içinde bulunamadı; metrikler sınırlı olabilir.')}",
         "",
         "### Temel Demo Eventleri",
         "",
+        f"* Kill/death event çıktı mı: {_yes_no((agg.get('kills') or 0) + (agg.get('deaths') or 0) > 0)}",
         f"* Kill: {_fmt(agg.get('kills'))}",
         f"* Death: {_fmt(agg.get('deaths'))}",
         f"* Silahlar: {_fmt(', '.join(agg.get('weapons') or []) or MISSING_DATA_LABEL)}",
         f"* Round sayısı: {_fmt(agg.get('round_count'))}",
-        f"* Tick data: {'Evet' if agg.get('tick_data_available') else 'Hayır / veri yetersiz'}",
-        f"* Shot event: {'Evet' if agg.get('shot_event_available') else 'Hayır / veri yetersiz'}",
+        f"* Shot event çıktı mı: {_yes_no(agg.get('shot_event_available'))}",
+        f"* Tick/velocity verisi çıktı mı: {_yes_no(agg.get('tick_data_available'))}",
+        "",
+        f"* Mekanik metrik üretildi mi: {_yes_no(lab.get('mechanics_produced'))}",
         "",
     ])
 
@@ -96,13 +132,19 @@ def render_mechanics_lab_markdown(lab: dict[str, Any]) -> list[str]:
         for demo in lab.get("demos") or []:
             status = demo.get("status", "?")
             fname = demo.get("demo_file", "?")
+            src = demo.get("source_compressed")
+            prefix = f"`{fname}`"
+            if src:
+                prefix += f" (kaynak: `{src}`)"
             if status == "ok":
                 lines.append(
-                    f"- `{fname}` — kill {demo.get('kills', 0)}, death {demo.get('deaths', 0)}, "
+                    f"- {prefix} — kill {demo.get('kills', 0)}, death {demo.get('deaths', 0)}, "
+                    f"shot {_yes_no(demo.get('shot_event_available'))}, "
+                    f"tick {_yes_no(demo.get('tick_data_available'))}, "
                     f"confidence {_fmt(demo.get('confidence'))}"
                 )
             else:
-                lines.append(f"- `{fname}` — {_fmt(demo.get('reason', 'okunamadı'))}")
+                lines.append(f"- {prefix} — {_fmt(demo.get('reason', 'okunamadı'))}")
         lines.append("")
 
     lines.extend(["### Counter-strafe / Spray Ön Metrikleri", ""])

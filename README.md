@@ -148,9 +148,13 @@ Desteklenen uzantılar: `.dem`, `.dem.gz`, `.dem.zst`
 
 ### Sıkıştırılmış demo (.dem.gz / .dem.zst)
 
-İlk sürüm sıkıştırılmış dosyaları **otomatik açmaz**. Önce `.dem` olarak çıkarın; aksi halde raporda şu uyarı görünür:
+`--mechanics` ile çalıştırıldığında program sıkıştırılmış dosyayı **otomatik** aynı klasöre `.dem` olarak çıkarır:
 
-> Sıkıştırılmış demo bulundu; önce .dem olarak çıkarılmalı.
+- `ilkdenemedemo.dem.zst` → `ilkdenemedemo.dem`
+- `.dem` zaten varsa tekrar çıkarılmaz
+- `.dem.gz` için gzip desteği vardır
+
+Çıkarma başarısız olursa raporda net hata mesajı görünür; normal FACEIT analizi etkilenmez.
 
 ### Mechanics Lab kullanımı
 
