@@ -174,10 +174,14 @@ def render_mechanics_lab_markdown(lab: dict[str, Any]) -> list[str]:
         lines.extend([
             f"* Total shots (gun): {_fmt(mech.get('total_shots'))}",
             f"* Shots with velocity: {_fmt(mech.get('shots_with_velocity'))}",
-            f"* Shots while moving %: {_fmt(mech.get('shots_while_moving_pct'))}",
-            f"* First bullet moving %: {_fmt(mech.get('first_bullet_moving_pct'))}",
+            f"* Burst count: {_fmt(mech.get('burst_count'))}",
             f"* Average speed at shot: {_fmt(mech.get('average_speed_at_shot'))}",
+            f"* Median speed at shot: {_fmt(mech.get('median_speed_at_shot'))}",
+            f"* Shots while moving % (>34): {_fmt(mech.get('shots_while_moving_pct'))}",
+            f"* First bullet moving %: {_fmt(mech.get('first_bullet_moving_pct'))}",
             f"* Spray length average: {_fmt(mech.get('spray_length_average'))}",
+            f"* Long spray % (7+ mermi): {_fmt(mech.get('long_spray_pct'))}",
+            f"* AK/M4 burst average: {_fmt(mech.get('ak_m4_burst_average'))}",
             "",
             "**Weapon shot counts:**",
             "",
@@ -193,6 +197,12 @@ def render_mechanics_lab_markdown(lab: dict[str, Any]) -> list[str]:
             for weapon, count in sorted(ak_m4.items(), key=lambda x: -x[1]):
                 lines.append(f"- {weapon}: {count}")
         lines.append("")
+        commentary = mech.get("commentary") or []
+        if commentary:
+            lines.extend(["**Yorum:**", ""])
+            for note in commentary:
+                lines.append(f"- {note}")
+            lines.append("")
         if mech.get("note"):
             lines.append(f"_{mech['note']}_")
             lines.append("")

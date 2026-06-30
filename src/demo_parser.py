@@ -15,9 +15,14 @@ MATCH_ID_RE = re.compile(
     r"1-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
     re.I,
 )
-MOVING_SPEED_THRESHOLD = 5.0
+STOPPED_SPEED_THRESHOLD = 5.0
+MOVING_SPEED_THRESHOLD = 34.0
 MIN_SHOTS_FOR_METRICS = 20
 SPRAY_GAP_TICKS = 16
+LONG_SPRAY_MIN_SHOTS = 7
+HIGH_MOVING_PCT = 50.0
+HIGH_FIRST_BULLET_MOVING_PCT = 40.0
+HIGH_LONG_SPRAY_PCT = 35.0
 NON_GUN_WEAPON_PARTS = (
     "knife", "grenade", "flash", "smoke", "molotov", "incgrenade", "decoy", "c4",
 )
@@ -469,6 +474,101 @@ def _tick_int(row: dict[str, Any]) -> int | None:
         return None
 
 
+def _moving_status(speed: float | None) -> str:
+    if speed is None:
+        return "unknown"
+    if speed <= STOPPED_SPEED_THRESHOLD:
+        return "stopped"
+    if speed <= MOVING_SPEED_THRESHOLD:
+        return "micro_moving"
+    return "moving"
+
+
+def _is_ak_m4_weapon(weapon: str | None) -> bool:
+    if not weapon:
+        return False
+    w = weapon.lower()
+    return "ak47" in w or "m4a1" in w
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def _group_shot_bursts(gun_rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Aynı silah + yakın tick aralığındaki ardışık atışları burst olarak gruplar."""
+    sorted_rows = sorted(
+        [row for row in gun_rows if _tick_int(row) is not None],
+        key=lambda row: _tick_int(row) or 0,
+    )
+    bursts: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    prev_tick: int | None = None
+    prev_weapon: str | None = None
+
+    for row in sorted_rows:
+        tick = _tick_int(row)
+        weapon = _row_player_name(row, "weapon", "weapon_name")
+        if (
+            current
+            and tick is not None
+            and prev_tick is not None
+            and weapon == prev_weapon
+            and tick - prev_tick <= SPRAY_GAP_TICKS
+        ):
+            current.append(row)
+        else:
+            if current:
+                bursts.append(current)
+            current = [row]
+        prev_tick = tick
+        prev_weapon = weapon
+
+    if current:
+        bursts.append(current)
+    return bursts
+
+
+def _shot_debug_row(row: dict[str, Any]) -> dict[str, Any]:
+    speed = _speed_from_row(row)
+    return {
+        "tick": _tick_int(row),
+        "weapon": _row_player_name(row, "weapon", "weapon_name"),
+        "user_name": _row_player_name(row, "user_name", "name"),
+        "user_steamid": _row_steamid(row),
+        "user_velocity": speed,
+        "moving_status": _moving_status(speed),
+    }
+
+
+def _generate_mechanics_commentary(metrics: dict[str, Any]) -> list[str]:
+    notes: list[str] = []
+    moving_pct = metrics.get("shots_while_moving_pct")
+    first_pct = metrics.get("first_bullet_moving_pct")
+    long_spray = metrics.get("long_spray_pct")
+
+    if isinstance(moving_pct, (int, float)) and moving_pct >= HIGH_MOVING_PCT:
+        notes.append("Counter-strafe problemi şüphesi.")
+    if isinstance(first_pct, (int, float)) and first_pct >= HIGH_FIRST_BULLET_MOVING_PCT:
+        notes.append("İlk mermi stabilitesi sorunu.")
+    if isinstance(long_spray, (int, float)) and long_spray >= HIGH_LONG_SPRAY_PCT:
+        notes.append("Uzun spray alışkanlığı var; burst/reset çalış.")
+    if not notes:
+        notes.append("Belirgin counter-strafe/spray sinyali yok; yine de demo parser ilk sürüm sinyalidir.")
+    return notes
+    try:
+        tick = row.get("tick")
+        return int(tick) if tick is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def match_shots_to_tick_velocity(
     shot_rows: list[dict[str, Any]],
     tick_rows: list[dict[str, Any]],
@@ -514,7 +614,7 @@ def _mechanics_confidence(matched_with_speed: int, total_shots: int) -> str:
     ratio = matched_with_speed / total_shots
     if ratio >= 0.8:
         return "medium"
-    if ratio >= 0.2:
+    if ratio >= 0.4:
         return "low"
     return "none"
 
@@ -524,7 +624,7 @@ def _compute_shot_mechanics(
     *,
     tick_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Shot + velocity eşleşmesinden counter-strafe/spray ön metrikleri."""
+    """user_velocity (shot event) tabanlı counter-strafe / spray ön metrikleri."""
     rows = match_shots_to_tick_velocity(shot_rows, tick_rows or [])
     gun_rows = [
         row for row in rows
@@ -534,57 +634,49 @@ def _compute_shot_mechanics(
     total_shots = len(gun_rows)
     speeds: list[float] = []
     moving_shots = 0
-    first_bullet_moving = 0
-    burst_lengths: list[int] = []
     weapon_counts: dict[str, int] = {}
-    ak_m4_counts: dict[str, int] = {}
     matched_with_velocity = 0
     source_counts: dict[str, int] = {}
-
-    current_burst = 0
-    current_weapon: str | None = None
-    prev_tick: int | None = None
 
     for row in gun_rows:
         speed = row.get("matched_speed")
         if speed is None:
             speed = _speed_from_row(row)
         source = row.get("speed_source") or ("shot_event" if speed is not None else "none")
-
         weapon = _row_player_name(row, "weapon", "weapon_name") or "unknown"
         weapon_counts[weapon] = weapon_counts.get(weapon, 0) + 1
-        if "ak47" in weapon.lower() or "m4a1" in weapon.lower():
-            ak_m4_counts[weapon] = ak_m4_counts.get(weapon, 0) + 1
-
-        tick = _tick_int(row)
 
         if speed is not None:
             matched_with_velocity += 1
+            speed_f = float(speed)
             source_counts[source or "unknown"] = source_counts.get(source or "unknown", 0) + 1
-            speeds.append(float(speed))
-            if float(speed) > MOVING_SPEED_THRESHOLD:
+            speeds.append(speed_f)
+            if _moving_status(speed_f) == "moving":
                 moving_shots += 1
 
-        if tick is not None and prev_tick is not None and current_weapon == weapon:
-            if tick - prev_tick <= SPRAY_GAP_TICKS:
-                current_burst += 1
-            else:
-                if current_burst > 0:
-                    burst_lengths.append(current_burst + 1)
-                current_burst = 0
-        else:
-            if current_burst > 0:
-                burst_lengths.append(current_burst + 1)
-            current_burst = 0
+    bursts = _group_shot_bursts(gun_rows)
+    burst_lengths = [len(burst) for burst in bursts]
+    long_spray_bursts = sum(1 for length in burst_lengths if length >= LONG_SPRAY_MIN_SHOTS)
 
-        if speed is not None and float(speed) > MOVING_SPEED_THRESHOLD and current_burst == 0:
+    first_bullet_moving = 0
+    bursts_with_first_velocity = 0
+    ak_m4_burst_lengths: list[int] = []
+
+    for burst in bursts:
+        if not burst:
+            continue
+        first = burst[0]
+        first_speed = first.get("matched_speed")
+        if first_speed is None:
+            first_speed = _speed_from_row(first)
+        weapon = _row_player_name(first, "weapon", "weapon_name")
+        if _is_ak_m4_weapon(weapon):
+            ak_m4_burst_lengths.append(len(burst))
+        if first_speed is None:
+            continue
+        bursts_with_first_velocity += 1
+        if _moving_status(float(first_speed)) == "moving":
             first_bullet_moving += 1
-
-        current_weapon = weapon
-        prev_tick = tick
-
-    if current_burst > 0:
-        burst_lengths.append(current_burst + 1)
 
     metrics_confidence = _mechanics_confidence(matched_with_velocity, total_shots)
     reliable = matched_with_velocity >= MIN_SHOTS_FOR_METRICS and metrics_confidence != "none"
@@ -598,36 +690,57 @@ def _compute_shot_mechanics(
             round(matched_with_velocity / total_shots * 100, 1) if total_shots else 0
         ),
         "velocity_fields_found": matched_with_velocity > 0,
+        "velocity_source": "user_velocity",
         "speed_sources": source_counts,
+        "burst_count": len(bursts),
         "shots_while_moving_pct": MISSING_DATA_LABEL,
         "first_bullet_moving_pct": MISSING_DATA_LABEL,
         "average_speed_at_shot": MISSING_DATA_LABEL,
+        "median_speed_at_shot": MISSING_DATA_LABEL,
         "spray_length_average": MISSING_DATA_LABEL,
+        "long_spray_pct": MISSING_DATA_LABEL,
+        "ak_m4_burst_average": MISSING_DATA_LABEL,
         "weapon_shot_counts": weapon_counts,
-        "ak_m4_shot_counts": ak_m4_counts,
+        "ak_m4_shot_counts": {
+            w: c for w, c in weapon_counts.items() if _is_ak_m4_weapon(w)
+        },
+        "commentary": [],
         "note": "",
     }
 
     if not reliable:
         if matched_with_velocity == 0:
             metrics["note"] = (
-                "Shot event var ama player velocity alanı bulunamadı veya eşleşmedi."
+                "Shot event var ama user_velocity alanı bulunamadı veya eşleşmedi."
             )
         else:
             metrics["note"] = (
-                f"Yalnızca {matched_with_velocity}/{total_shots} shot velocity ile eşleşti; "
+                f"Yalnızca {matched_with_velocity}/{total_shots} shot user_velocity ile eşleşti; "
                 "güven düşük — veri yetersiz."
             )
         return metrics
 
-    metrics["shots_while_moving_pct"] = round(moving_shots / matched_with_velocity * 100, 1)
-    metrics["first_bullet_moving_pct"] = round(first_bullet_moving / total_shots * 100, 1)
-    metrics["average_speed_at_shot"] = round(sum(speeds) / len(speeds), 1)
-    if burst_lengths:
-        metrics["spray_length_average"] = round(sum(burst_lengths) / len(burst_lengths), 1)
+    median_speed = _median(speeds)
+    metrics.update({
+        "shots_while_moving_pct": round(moving_shots / matched_with_velocity * 100, 1),
+        "first_bullet_moving_pct": round(
+            first_bullet_moving / bursts_with_first_velocity * 100, 1,
+        ) if bursts_with_first_velocity else 0,
+        "average_speed_at_shot": round(sum(speeds) / len(speeds), 1),
+        "median_speed_at_shot": round(median_speed, 1) if median_speed is not None else MISSING_DATA_LABEL,
+        "spray_length_average": round(sum(burst_lengths) / len(burst_lengths), 1) if burst_lengths else MISSING_DATA_LABEL,
+        "long_spray_pct": round(long_spray_bursts / len(bursts) * 100, 1) if bursts else 0,
+        "ak_m4_burst_average": (
+            round(sum(ak_m4_burst_lengths) / len(ak_m4_burst_lengths), 1)
+            if ak_m4_burst_lengths else MISSING_DATA_LABEL
+        ),
+    })
+    metrics["commentary"] = _generate_mechanics_commentary(metrics)
     metrics["note"] = (
-        f"{matched_with_velocity} shot velocity ile eşleşti ({metrics['velocity_match_pct']}%). "
-        "Demo parser ilk sürüm mekanik sinyali; kesin profesyonel analiz değildir."
+        f"{matched_with_velocity}/{total_shots} shot user_velocity ile eşleşti "
+        f"({metrics['velocity_match_pct']}%). "
+        + " ".join(metrics["commentary"])
+        + " Kesin spray kontrolü teşhisi değil; mermi dağılımı/hit doğrulaması sınırlı."
     )
     return metrics
 
@@ -698,10 +811,13 @@ def collect_demo_debug_info(
         ticks = extract_player_ticks_if_available(
             parser, matched_name, matched_steamid=matched_steamid,
         )
-        shot_sample = (shots.get("rows") or [])[:5]
+        shot_sample = [_shot_debug_row(row) for row in (shots.get("rows") or [])[:10]]
         tick_sample = (ticks.get("rows") or [])[:5]
         matched_shots = match_shots_to_tick_velocity(
             shots.get("rows") or [], ticks.get("rows") or [],
+        )
+        mechanics_preview = _compute_shot_mechanics(
+            shots.get("rows") or [], tick_rows=ticks.get("rows") or [],
         )
 
         common_keys = []
@@ -727,6 +843,7 @@ def collect_demo_debug_info(
             "matched_with_velocity": sum(
                 1 for row in matched_shots if row.get("matched_speed") is not None
             ),
+            "mechanics_preview": mechanics_preview,
         })
     except Exception as exc:
         info["errors"].append(str(exc))
@@ -778,15 +895,38 @@ def render_demo_debug_markdown(debug: dict[str, Any]) -> str:
         f"- Velocity'li tick sayısı: {debug.get('velocity_ticks')}",
         f"- Eşleşen shot+velocity: {debug.get('matched_with_velocity')}",
         "",
-        "### İlk 5 shot event",
+        "### İlk 10 shot event (Jurses)",
         "",
+        "| tick | weapon | user_name | user_steamid | user_velocity | moving_status |",
+        "| --- | --- | --- | --- | --- | --- |",
     ])
     for row in debug.get("shot_sample") or []:
         lines.append(
-            f"- tick={row.get('tick')} weapon={row.get('weapon')} "
-            f"user_velocity={row.get('user_velocity')} user_name={row.get('user_name')}"
+            f"| {row.get('tick')} | {row.get('weapon')} | {row.get('user_name')} | "
+            f"{row.get('user_steamid')} | {row.get('user_velocity')} | {row.get('moving_status')} |"
         )
-    lines.extend(["", "### İlk 5 player tick", ""])
+    preview = debug.get("mechanics_preview") or {}
+    if preview:
+        lines.extend([
+            "",
+            "## user_velocity metrik önizleme",
+            "",
+            f"- total_shots: {preview.get('total_shots')}",
+            f"- shots_with_velocity: {preview.get('shots_with_velocity')}",
+            f"- average_speed_at_shot: {preview.get('average_speed_at_shot')}",
+            f"- median_speed_at_shot: {preview.get('median_speed_at_shot')}",
+            f"- shots_while_moving_pct: {preview.get('shots_while_moving_pct')}",
+            f"- first_bullet_moving_pct: {preview.get('first_bullet_moving_pct')}",
+            f"- spray_length_average: {preview.get('spray_length_average')}",
+            f"- long_spray_pct: {preview.get('long_spray_pct')}",
+            f"- confidence: {preview.get('metrics_confidence')}",
+            "",
+        ])
+    lines.extend([
+        "",
+        "### İlk 5 player tick",
+        "",
+    ])
     for row in debug.get("tick_sample") or []:
         lines.append(
             f"- tick={row.get('tick')} velocity={row.get('velocity')} "
@@ -1035,15 +1175,19 @@ def build_mechanics_summary(
             "metrics_confidence": reliable_mech[0].get("metrics_confidence", "medium"),
             "shots_with_velocity": sum(m.get("shots_with_velocity", 0) for m in reliable_mech),
             "total_shots": sum(m.get("total_shots", 0) for m in reliable_mech),
+            "burst_count": sum(m.get("burst_count", 0) for m in reliable_mech),
             "shots_while_moving_pct": _avg("shots_while_moving_pct"),
             "first_bullet_moving_pct": _avg("first_bullet_moving_pct"),
             "average_speed_at_shot": _avg("average_speed_at_shot"),
+            "median_speed_at_shot": _avg("median_speed_at_shot"),
             "spray_length_average": _avg("spray_length_average"),
+            "long_spray_pct": _avg("long_spray_pct"),
+            "ak_m4_burst_average": _avg("ak_m4_burst_average"),
             "weapon_shot_counts": weapon_totals,
             "ak_m4_shot_counts": ak_totals,
-            "note": (
-                f"{len(reliable_mech)} demo üzerinden ön metrik ortalaması; "
-                "demo parser ilk sürüm mekanik sinyali — kesin profesyonel analiz değildir."
+            "commentary": reliable_mech[0].get("commentary") or [],
+            "note": reliable_mech[0].get("note") or (
+                f"{len(reliable_mech)} demo üzerinden user_velocity ön metrik ortalaması."
             ),
         }
 
