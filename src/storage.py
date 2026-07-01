@@ -425,6 +425,7 @@ def build_memory_context(
     report_path: str,
     *,
     previous: dict[str, Any] | None = None,
+    pistol_metrics_sufficient: bool = False,
 ) -> dict[str, Any]:
     """Hafıza tabanlı rapor bağlamını oluşturur."""
     stored_total = count_stored_matches(nickname)
@@ -504,7 +505,10 @@ def build_memory_context(
         if not unchanged_problems:
             unchanged_problems.append("Önceki analizdeki problemler büyük ölçüde değişti veya veri yetersiz.")
 
-    focus_plan = _build_7_day_plan(coaching_focus)
+    focus_plan = _build_7_day_plan(
+        coaching_focus,
+        pistol_metrics_sufficient=pistol_metrics_sufficient,
+    )
 
     return {
         "is_first_analysis": is_first,
@@ -522,20 +526,28 @@ def build_memory_context(
     }
 
 
-def _build_7_day_plan(focus_items: list[str]) -> list[dict[str, str]]:
-    if not focus_items:
-        focus_items = [
-            "Maç öncesi 10 dk aim + utility warmup",
-            "Her maç sonrası 1 round kritik hata notu",
-            "Stack ile rol netliği (entry/support) konuş",
-        ]
-
+def _build_7_day_plan(
+    focus_items: list[str] | None = None,
+    *,
+    pistol_metrics_sufficient: bool = False,
+) -> list[dict[str, str]]:
+    """Mekanik odaklı sabit 7 günlük plan."""
     days = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
-    plan: list[dict[str, str]] = []
-    for index, day in enumerate(days):
-        focus = focus_items[index % len(focus_items)]
-        plan.append({"day": day, "focus": focus})
-    return plan
+    day5 = (
+        "Pistol mechanics — starter/force pistol ADAD ve ilk mermi reset"
+        if pistol_metrics_sufficient
+        else "Utility + default setup review (pistol demo verisi yetersiz)"
+    )
+    focuses = [
+        "AK counter-strafe + 1–3 bullet tap (DM/warmup)",
+        "M4 5 bullet burst + spray reset drill",
+        "Dust2 demo review — pozisyon ve rotasyon",
+        "Ancient/Anubis pozisyon review",
+        day5,
+        "1–2 FACEIT maç + demo çıkar",
+        "Yeni demo ile metrik karşılaştırması (Mechanics Lab)",
+    ]
+    return [{"day": day, "focus": focus} for day, focus in zip(days, focuses)]
 
 
 def persist_analysis_run(
@@ -551,6 +563,7 @@ def persist_analysis_run(
     days: int = 90,
     requested_matches: int = 120,
     period_metrics: dict[str, Any] | None = None,
+    mechanics_lab: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Maçları kaydeder, analiz ve önerileri persist eder."""
     previous = get_last_analysis(nickname)
@@ -586,6 +599,13 @@ def persist_analysis_run(
 
     rec_status = evaluate_recommendations(nickname, summary, previous) if previous else []
 
+    pistol_ok = False
+    if mechanics_lab:
+        mech = (mechanics_lab.get("aggregated") or {}).get("mechanics") or {}
+        pistol_total = mech.get("pistol_total_shots", 0) or 0
+        pistol_conf = mech.get("pistol_metrics_confidence", "none")
+        pistol_ok = pistol_total >= 10 and pistol_conf != "none"
+
     memory = build_memory_context(
         nickname,
         summary,
@@ -595,6 +615,7 @@ def persist_analysis_run(
         focus_items,
         report_path,
         previous=previous,
+        pistol_metrics_sufficient=pistol_ok,
     )
     memory["recommendation_status"] = rec_status
 

@@ -138,7 +138,8 @@ def compute_performance_summary(
     }
 
 
-MIN_MAP_MATCHES_FOR_VERDICT = 3
+MIN_MAP_MATCHES_FOR_VERDICT = 10
+LOW_SAMPLE_MAP_MIN = 3
 
 
 def compute_recent_form(normalized: dict[str, Any], count: int = 5) -> dict[str, Any]:
@@ -297,10 +298,16 @@ def compute_map_stats(normalized: dict[str, Any]) -> dict[str, Any]:
     best_map = MISSING_DATA_LABEL
     worst_map = MISSING_DATA_LABEL
     map_verdict_note = MISSING_DATA_LABEL
+    low_sample_maps: list[dict[str, Any]] = []
 
     eligible = [
         r for r in table
         if r["played"] >= MIN_MAP_MATCHES_FOR_VERDICT
+        and r["win_rate_pct"] != MISSING_DATA_LABEL
+    ]
+    low_sample_maps = [
+        r for r in table
+        if LOW_SAMPLE_MAP_MIN <= r["played"] < MIN_MAP_MATCHES_FOR_VERDICT
         and r["win_rate_pct"] != MISSING_DATA_LABEL
     ]
 
@@ -317,15 +324,22 @@ def compute_map_stats(normalized: dict[str, Any]) -> dict[str, Any]:
             if best_map == worst_map and len(sorted_maps) > 1:
                 worst_map = sorted_maps[1]["map"]
     elif eligible:
-        map_verdict_note = "Harita bazlı kesin yorum için veri yetersiz (harita başına min. 3 maç, en az 2 harita gerekli)."
+        map_verdict_note = (
+            "Harita bazlı kesin yorum için veri yetersiz "
+            "(harita başına min. 10 maç, en az 2 harita gerekli)."
+        )
     else:
-        map_verdict_note = "Harita bazlı kesin yorum için veri yetersiz (harita başına min. 3 maç gerekli)."
+        map_verdict_note = (
+            "Harita bazlı kesin yorum için veri yetersiz "
+            "(harita başına min. 10 maç gerekli)."
+        )
 
     return {
         "maps": table,
         "best_map": best_map,
         "worst_map": worst_map,
         "map_verdict_note": map_verdict_note,
+        "low_sample_maps": low_sample_maps,
     }
 
 

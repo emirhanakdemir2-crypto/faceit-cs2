@@ -154,15 +154,22 @@ def generate_coaching_draft(
     worst_map = map_stats.get("worst_map")
     map_note = map_stats.get("map_verdict_note")
     if best_map and best_map != MISSING_DATA_LABEL and not map_note:
-        strengths.append(f"En güçlü harita (3+ maç): {best_map} — bu haritada güvenli pick.")
+        strengths.append(f"En güçlü harita (10+ maç): {best_map} — bu haritada güvenli pick.")
     if (
         worst_map
         and worst_map != MISSING_DATA_LABEL
         and worst_map != best_map
         and not map_note
     ):
-        weaknesses.append(f"En zayıf harita (3+ maç): {worst_map} — demo incelemesi önerilir.")
+        weaknesses.append(f"En zayıf harita (10+ maç): {worst_map} — demo incelemesi önerilir.")
         focus.append(f"{worst_map} için default setup, rotasyon ve mid-round kararlarını gözden geçir.")
+
+    low_sample = map_stats.get("low_sample_maps") or []
+    for row in low_sample[:3]:
+        weaknesses.append(
+            f"Düşük örneklem ({row.get('played')} maç): {row.get('map')} "
+            f"(WR {row.get('win_rate_pct')}%) — kesin zayıf harita sayılmaz."
+        )
 
     if high_level and not focus:
         focus.append("Karar kalitesi: hangi duel'leri alıp hangilerinden kaçındığını maç sonu not et.")

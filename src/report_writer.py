@@ -291,10 +291,19 @@ def write_markdown_report(
         lines.append("")
     else:
         lines.extend([
-            f"**En iyi harita (min. 3 maç):** {_fmt(map_stats.get('best_map'))}  ",
-            f"**En zayıf harita:** {_fmt(map_stats.get('worst_map'))}",
+            f"**En iyi harita (min. 10 maç):** {_fmt(map_stats.get('best_map'))}  ",
+            f"**En zayıf harita (min. 10 maç):** {_fmt(map_stats.get('worst_map'))}",
             "",
         ])
+    low_sample = map_stats.get("low_sample_maps") or []
+    if low_sample:
+        lines.append("**Düşük örneklem (3–9 maç, ana zayıf harita seçimine dahil değil):**")
+        lines.append("")
+        for row in low_sample:
+            lines.append(
+                f"- {_fmt(row.get('map'))}: {row.get('played')} maç, WR {_fmt(row.get('win_rate_pct'))}%"
+            )
+        lines.append("")
     lines.extend([
         "| Harita | Oynanan | G | M | Kazanma % |",
         "| --- | --- | --- | --- | --- |",

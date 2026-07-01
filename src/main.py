@@ -277,6 +277,7 @@ def main(argv: list[str] | None = None) -> int:
             days=days,
             requested_matches=match_count,
             period_metrics=period_comparison,
+            mechanics_lab=mechanics_lab,
         )
     else:
         memory = {

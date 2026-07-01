@@ -27,6 +27,13 @@ NON_GUN_WEAPON_PARTS = (
     "knife", "grenade", "flash", "smoke", "molotov", "incgrenade", "decoy", "c4",
 )
 RIFLE_WEAPON_PARTS = ("ak47", "m4a1", "m4a4", "aug", "sg556", "galil", "famas")
+STARTER_PISTOL_PARTS = ("glock", "usp_silencer", "hkp2000")
+FORCE_PISTOL_PARTS = ("tec9", "fiveseven", "p250", "cz75a", "elite")
+DEAGLE_PARTS = ("deagle",)
+REVOLVER_PARTS = ("revolver",)
+SMG_WEAPON_PARTS = ("mp9", "mac10", "mp7", "mp5sd", "ump45", "p90", "bizon")
+PISTOL_WEAPON_PARTS = STARTER_PISTOL_PARTS + FORCE_PISTOL_PARTS + DEAGLE_PARTS + REVOLVER_PARTS
+MIN_PISTOL_SHOTS_FOR_COMMENTARY = 10
 
 
 def demoparser_available() -> bool:
@@ -59,6 +66,41 @@ def _is_gun_weapon(weapon: str | None) -> bool:
         return False
     w = weapon.lower()
     return not any(part in w for part in NON_GUN_WEAPON_PARTS)
+
+
+def _weapon_base(weapon: str | None) -> str:
+    if not weapon:
+        return ""
+    return weapon.lower().replace("weapon_", "")
+
+
+def _weapon_matches_parts(weapon: str | None, parts: tuple[str, ...]) -> bool:
+    w = _weapon_base(weapon)
+    return bool(w) and any(part in w for part in parts)
+
+
+def _is_pistol_weapon(weapon: str | None) -> bool:
+    return _weapon_matches_parts(weapon, PISTOL_WEAPON_PARTS)
+
+
+def _is_starter_pistol_weapon(weapon: str | None) -> bool:
+    return _weapon_matches_parts(weapon, STARTER_PISTOL_PARTS)
+
+
+def _is_force_pistol_weapon(weapon: str | None) -> bool:
+    return _weapon_matches_parts(weapon, FORCE_PISTOL_PARTS)
+
+
+def _is_deagle_weapon(weapon: str | None) -> bool:
+    return _weapon_matches_parts(weapon, DEAGLE_PARTS)
+
+
+def _is_revolver_weapon(weapon: str | None) -> bool:
+    return _weapon_matches_parts(weapon, REVOLVER_PARTS)
+
+
+def _is_smg_weapon(weapon: str | None) -> bool:
+    return _weapon_matches_parts(weapon, SMG_WEAPON_PARTS)
 
 
 def _is_rifle_weapon(weapon: str | None) -> bool:
@@ -595,6 +637,75 @@ def _generate_mechanics_commentary(metrics: dict[str, Any], *, rifle_only: bool 
     return notes
 
 
+def _generate_rifle_commentary(
+    merged: dict[str, Any],
+    ak_metrics: dict[str, Any],
+    m4_metrics: dict[str, Any],
+) -> list[str]:
+    confidence = merged.get("rifle_metrics_confidence", "none")
+    if confidence == "none":
+        return ["Rifle velocity verisi yetersiz; counter-strafe teşhisi yapılmadı."]
+
+    notes: list[str] = []
+    ak_first = ak_metrics.get("first_bullet_moving_pct")
+    m4_long = m4_metrics.get("long_spray_pct")
+    rifle_mov = merged.get("rifle_shots_while_moving_pct")
+    rifle_first = merged.get("rifle_first_bullet_moving_pct")
+    rifle_long = merged.get("rifle_long_spray_pct")
+
+    if isinstance(ak_first, (int, float)) and ak_first >= HIGH_FIRST_BULLET_MOVING_PCT:
+        notes.append("AK: counter-strafe timing problemi — ilk mermi çok sık hareket halinde.")
+    if isinstance(m4_long, (int, float)) and m4_long >= HIGH_LONG_SPRAY_PCT:
+        notes.append("M4: spray reset problemi — uzun spray oranı yüksek.")
+    if isinstance(rifle_mov, (int, float)) and rifle_mov >= HIGH_MOVING_PCT:
+        notes.append("Rifle genel: hareket halinde ateş oranı yüksek; counter-strafe reset eksik.")
+    elif isinstance(rifle_first, (int, float)) and rifle_first >= HIGH_FIRST_BULLET_MOVING_PCT:
+        notes.append("Rifle genel: ilk mermi stabilitesi zayıf.")
+    elif isinstance(rifle_long, (int, float)) and rifle_long >= HIGH_LONG_SPRAY_PCT:
+        notes.append("Rifle genel: uzun spray alışkanlığı; burst/reset çalış.")
+    if not notes:
+        notes.append("Rifle: belirgin counter-strafe/spray sinyali yok.")
+    return notes
+
+
+def _generate_pistol_commentary(merged: dict[str, Any]) -> list[str]:
+    confidence = merged.get("pistol_metrics_confidence", "none")
+    total = merged.get("pistol_total_shots", 0) or 0
+    if confidence == "none" or total < MIN_PISTOL_SHOTS_FOR_COMMENTARY:
+        return ["Pistol velocity verisi yetersiz; kesin pistol yorumu yapılmadı."]
+
+    notes: list[str] = []
+    starter_first = merged.get("starter_pistol_first_bullet_moving_pct")
+    starter_mov = merged.get("starter_pistol_shots_while_moving_pct")
+    force_mov = merged.get("force_pistol_shots_while_moving_pct")
+    deagle_first = merged.get("deagle_first_bullet_moving_pct")
+
+    if isinstance(starter_first, (int, float)) and starter_first > 50:
+        notes.append("Pistol round ilk mermi stabilitesi zayıf.")
+    if isinstance(starter_mov, (int, float)) and starter_mov > 35:
+        notes.append("USP/Glock düellolarında ADAD sırasında erken click var.")
+    if isinstance(force_mov, (int, float)) and force_mov > 60:
+        notes.append(
+            "Force pistol hareketli spam yüksek; Tec-9/Five-Seven için kısmen normal "
+            "ama rifle disipliniyle karıştırma."
+        )
+    if isinstance(deagle_first, (int, float)) and deagle_first > 30:
+        notes.append("Deagle'da durmadan ateş etme problemi var.")
+    if not notes:
+        notes.append("Pistol: belirgin stabilite/spam sinyali yok.")
+    return notes
+
+
+def _generate_smg_commentary(merged: dict[str, Any]) -> list[str]:
+    confidence = merged.get("smg_metrics_confidence", "none")
+    if confidence == "none":
+        return ["SMG velocity verisi yetersiz; SMG yorumu yapılmadı."]
+    mov = merged.get("smg_shots_while_moving_pct")
+    if isinstance(mov, (int, float)) and mov >= 55:
+        return ["SMG: hareket halinde spam yüksek — SMG için beklenen; pistol/rifle ile karıştırma."]
+    return ["SMG: pistol/rifle counter-strafe teşhisine dahil edilmez."]
+
+
 def match_shots_to_tick_velocity(
     shot_rows: list[dict[str, Any]],
     tick_rows: list[dict[str, Any]],
@@ -645,15 +756,30 @@ def _mechanics_confidence(matched_with_speed: int, total_shots: int) -> str:
     return "none"
 
 
-def _prefix_mechanics(metrics: dict[str, Any], prefix: str) -> dict[str, Any]:
+def _prefix_mechanics(
+    metrics: dict[str, Any],
+    prefix: str,
+    *,
+    spam_terms: bool = False,
+) -> dict[str, Any]:
     """Metrik anahtarlarına prefix ekler (örn. rifle_total_shots)."""
-    skip = {"weapon_shot_counts", "ak_m4_shot_counts", "speed_sources", "commentary", "_raw", "ak_metrics", "m4_metrics"}
+    skip = {
+        "weapon_shot_counts", "ak_m4_shot_counts", "speed_sources", "commentary", "_raw",
+        "ak_metrics", "m4_metrics", "pistol_metrics", "smg_metrics",
+        "starter_pistol_metrics", "force_pistol_metrics", "deagle_metrics", "revolver_metrics",
+        "rifle_commentary", "pistol_commentary", "smg_commentary", "counter_strafe_commentary",
+    }
     out: dict[str, Any] = {}
     for key, val in metrics.items():
-        if key in skip or key.startswith(prefix):
-            out[f"{prefix}_{key}" if not key.startswith(prefix) else key] = val
-        else:
-            out[f"{prefix}_{key}"] = val
+        if key in skip or key.startswith(f"{prefix}_"):
+            continue
+        out_key = f"{prefix}_{key}"
+        if spam_terms:
+            if key == "spray_length_average":
+                out_key = f"{prefix}_spam_length_average"
+            elif key == "long_spray_pct":
+                out_key = f"{prefix}_long_spam_pct"
+        out[out_key] = val
     return out
 
 
@@ -801,19 +927,39 @@ def _build_full_mechanics(
     *,
     tick_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Tüm silah + rifle + AK + M4 metrik paketi."""
+    """Tüm silah + rifle + pistol + SMG metrik paketi."""
     base = _compute_shot_mechanics(shot_rows, tick_rows=tick_rows)
     rifle = _compute_shot_mechanics(shot_rows, tick_rows=tick_rows, weapon_filter=_is_rifle_weapon)
     ak = _compute_shot_mechanics(shot_rows, tick_rows=tick_rows, weapon_filter=_is_ak_weapon)
     m4 = _compute_shot_mechanics(shot_rows, tick_rows=tick_rows, weapon_filter=_is_m4_weapon)
+    pistol = _compute_shot_mechanics(shot_rows, tick_rows=tick_rows, weapon_filter=_is_pistol_weapon)
+    smg = _compute_shot_mechanics(shot_rows, tick_rows=tick_rows, weapon_filter=_is_smg_weapon)
+    starter = _compute_shot_mechanics(shot_rows, tick_rows=tick_rows, weapon_filter=_is_starter_pistol_weapon)
+    force = _compute_shot_mechanics(shot_rows, tick_rows=tick_rows, weapon_filter=_is_force_pistol_weapon)
+    deagle = _compute_shot_mechanics(shot_rows, tick_rows=tick_rows, weapon_filter=_is_deagle_weapon)
+    revolver = _compute_shot_mechanics(shot_rows, tick_rows=tick_rows, weapon_filter=_is_revolver_weapon)
 
     merged = {**base}
     merged.update(_prefix_mechanics(rifle, "rifle"))
+    merged.update(_prefix_mechanics(pistol, "pistol", spam_terms=True))
+    merged.update(_prefix_mechanics(smg, "smg"))
+    merged.update(_prefix_mechanics(starter, "starter_pistol", spam_terms=True))
+    merged.update(_prefix_mechanics(force, "force_pistol", spam_terms=True))
+    merged.update(_prefix_mechanics(deagle, "deagle", spam_terms=True))
+    merged.update(_prefix_mechanics(revolver, "revolver", spam_terms=True))
     merged["ak_metrics"] = ak
     merged["m4_metrics"] = m4
-    merged["rifle_commentary"] = _generate_mechanics_commentary(merged, rifle_only=True)
-    merged["commentary"] = _generate_mechanics_commentary(base, rifle_only=False)
+    merged["pistol_metrics"] = pistol
+    merged["smg_metrics"] = smg
+    merged["starter_pistol_metrics"] = starter
+    merged["force_pistol_metrics"] = force
+    merged["deagle_metrics"] = deagle
+    merged["revolver_metrics"] = revolver
+    merged["rifle_commentary"] = _generate_rifle_commentary(merged, ak, m4)
+    merged["pistol_commentary"] = _generate_pistol_commentary(merged)
+    merged["smg_commentary"] = _generate_smg_commentary(merged)
     merged["counter_strafe_commentary"] = merged["rifle_commentary"]
+    merged["commentary"] = merged["rifle_commentary"]
     return merged
 
 
@@ -1318,17 +1464,38 @@ def build_mechanics_summary(
             "rifle_first_bullet_moving_pct": mech.get("rifle_first_bullet_moving_pct"),
             "rifle_shots_while_moving_pct": mech.get("rifle_shots_while_moving_pct"),
             "rifle_long_spray_pct": mech.get("rifle_long_spray_pct"),
+            "pistol_total_shots": mech.get("pistol_total_shots", 0),
+            "pistol_first_bullet_moving_pct": mech.get("pistol_first_bullet_moving_pct"),
+            "pistol_shots_while_moving_pct": mech.get("pistol_shots_while_moving_pct"),
+            "pistol_long_spam_pct": mech.get("pistol_long_spam_pct"),
+            "smg_total_shots": mech.get("smg_total_shots", 0),
+            "smg_shots_while_moving_pct": mech.get("smg_shots_while_moving_pct"),
             "confidence": mech.get("rifle_metrics_confidence", mech.get("metrics_confidence", "none")),
+            "pistol_confidence": mech.get("pistol_metrics_confidence", "none"),
             "status": d.get("status"),
         })
 
     combined_rifle = combine_mechanics_metrics(reliable_mech, prefix="rifle_")
     combined_general = combine_mechanics_metrics(reliable_mech, prefix="")
+    combined_pistol = combine_mechanics_metrics(reliable_mech, prefix="pistol_")
+    combined_smg = combine_mechanics_metrics(reliable_mech, prefix="smg_")
     combined_ak = combine_mechanics_metrics(
         [m.get("ak_metrics", {}) for m in reliable_mech], prefix="",
     )
     combined_m4 = combine_mechanics_metrics(
         [m.get("m4_metrics", {}) for m in reliable_mech], prefix="",
+    )
+    combined_starter = combine_mechanics_metrics(
+        [m.get("starter_pistol_metrics", {}) for m in reliable_mech], prefix="",
+    )
+    combined_force = combine_mechanics_metrics(
+        [m.get("force_pistol_metrics", {}) for m in reliable_mech], prefix="",
+    )
+    combined_deagle = combine_mechanics_metrics(
+        [m.get("deagle_metrics", {}) for m in reliable_mech], prefix="",
+    )
+    combined_revolver = combine_mechanics_metrics(
+        [m.get("revolver_metrics", {}) for m in reliable_mech], prefix="",
     )
 
     if reliable_mech:
@@ -1344,18 +1511,43 @@ def build_mechanics_summary(
             for w, c in (m.get("ak_m4_shot_counts") or {}).items():
                 ak_totals[w] = ak_totals.get(w, 0) + int(c)
 
+        pistol_commentary = _generate_pistol_commentary({
+            "pistol_metrics_confidence": combined_pistol.get("pistol_metrics_confidence", "none"),
+            "pistol_total_shots": combined_pistol.get("pistol_total_shots", 0),
+            "starter_pistol_first_bullet_moving_pct": combined_starter.get("first_bullet_moving_pct"),
+            "starter_pistol_shots_while_moving_pct": combined_starter.get("shots_while_moving_pct"),
+            "force_pistol_shots_while_moving_pct": combined_force.get("shots_while_moving_pct"),
+            "deagle_first_bullet_moving_pct": combined_deagle.get("first_bullet_moving_pct"),
+        })
+        smg_commentary = _generate_smg_commentary({
+            "smg_metrics_confidence": combined_smg.get("smg_metrics_confidence", "none"),
+            "smg_shots_while_moving_pct": combined_smg.get("smg_shots_while_moving_pct"),
+        })
+        rifle_commentary = _generate_rifle_commentary(combined_rifle, combined_ak, combined_m4)
+
         aggregated["mechanics"] = {
             "reliable": True,
             "rifle_reliable": bool(combined_rifle.get("rifle_reliable")),
+            "pistol_reliable": bool(combined_pistol.get("pistol_reliable")),
+            "smg_reliable": bool(combined_smg.get("smg_reliable")),
             "metrics_confidence": combined_rifle.get("rifle_metrics_confidence", "medium"),
             "rifle_metrics_confidence": combined_rifle.get("rifle_metrics_confidence", "none"),
+            "pistol_metrics_confidence": combined_pistol.get("pistol_metrics_confidence", "none"),
+            "smg_metrics_confidence": combined_smg.get("smg_metrics_confidence", "none"),
             "combined_rifle": combined_rifle,
+            "combined_pistol": combined_pistol,
+            "combined_smg": combined_smg,
             "combined_general": combined_general,
             "combined_ak": combined_ak,
             "combined_m4": combined_m4,
-            "counter_strafe_commentary": combined_rifle.get("rifle_commentary") or _generate_mechanics_commentary(
-                combined_rifle, rifle_only=True,
-            ),
+            "combined_starter_pistol": combined_starter,
+            "combined_force_pistol": combined_force,
+            "combined_deagle": combined_deagle,
+            "combined_revolver": combined_revolver,
+            "counter_strafe_commentary": rifle_commentary,
+            "rifle_commentary": rifle_commentary,
+            "pistol_commentary": pistol_commentary,
+            "smg_commentary": smg_commentary,
             "shots_with_velocity": sum(m.get("shots_with_velocity", 0) for m in reliable_mech),
             "total_shots": sum(m.get("total_shots", 0) for m in reliable_mech),
             "rifle_total_shots": combined_rifle.get("rifle_total_shots", 0),
@@ -1366,6 +1558,28 @@ def build_mechanics_summary(
             "rifle_median_speed_at_shot": _avg("rifle_median_speed_at_shot"),
             "rifle_spray_length_average": combined_rifle.get("rifle_spray_length_average"),
             "rifle_long_spray_pct": combined_rifle.get("rifle_long_spray_pct"),
+            "pistol_total_shots": combined_pistol.get("pistol_total_shots", 0),
+            "pistol_shots_with_velocity": combined_pistol.get("pistol_shots_with_velocity", 0),
+            "pistol_average_speed_at_shot": combined_pistol.get("pistol_average_speed_at_shot"),
+            "pistol_median_speed_at_shot": _avg("pistol_median_speed_at_shot"),
+            "pistol_shots_while_moving_pct": combined_pistol.get("pistol_shots_while_moving_pct"),
+            "pistol_first_bullet_moving_pct": combined_pistol.get("pistol_first_bullet_moving_pct"),
+            "pistol_spam_length_average": combined_pistol.get("pistol_spray_length_average"),
+            "pistol_long_spam_pct": combined_pistol.get("pistol_long_spray_pct"),
+            "starter_pistol_total_shots": combined_starter.get("total_shots", 0),
+            "starter_pistol_first_bullet_moving_pct": combined_starter.get("first_bullet_moving_pct"),
+            "starter_pistol_shots_while_moving_pct": combined_starter.get("shots_while_moving_pct"),
+            "force_pistol_total_shots": combined_force.get("total_shots", 0),
+            "force_pistol_first_bullet_moving_pct": combined_force.get("first_bullet_moving_pct"),
+            "force_pistol_shots_while_moving_pct": combined_force.get("shots_while_moving_pct"),
+            "deagle_total_shots": combined_deagle.get("total_shots", 0),
+            "deagle_first_bullet_moving_pct": combined_deagle.get("first_bullet_moving_pct"),
+            "smg_total_shots": combined_smg.get("smg_total_shots", 0),
+            "smg_shots_with_velocity": combined_smg.get("smg_shots_with_velocity", 0),
+            "smg_shots_while_moving_pct": combined_smg.get("smg_shots_while_moving_pct"),
+            "smg_first_bullet_moving_pct": combined_smg.get("smg_first_bullet_moving_pct"),
+            "smg_spray_length_average": combined_smg.get("smg_spray_length_average"),
+            "smg_long_spray_pct": combined_smg.get("smg_long_spray_pct"),
             "burst_count": sum(m.get("burst_count", 0) for m in reliable_mech),
             "shots_while_moving_pct": combined_general.get("shots_while_moving_pct"),
             "first_bullet_moving_pct": combined_general.get("first_bullet_moving_pct"),
@@ -1377,9 +1591,9 @@ def build_mechanics_summary(
             "ak_m4_shot_counts": ak_totals,
             "ak_metrics": combined_ak,
             "m4_metrics": combined_m4,
-            "commentary": combined_rifle.get("rifle_commentary") or [],
+            "commentary": rifle_commentary,
             "note": (
-                f"{len(reliable_mech)} demo combined — counter-strafe yorumu rifle-only metriklerle üretildi."
+                f"{len(reliable_mech)} demo combined — ana yorum rifle/pistol/SMG ayrı metriklerle üretildi."
             ),
         }
 
