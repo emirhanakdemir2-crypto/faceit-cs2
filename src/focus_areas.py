@@ -52,30 +52,6 @@ def analyze_focus_areas(
             f"<{cfg.TARGET_STARTER_PISTOL_FIRST_BULLET}%",
             "5 dk USP/Glock stop-shot", "Pistol round ekonomisi etkilenir.")
 
-    worst = map_stats.get("worst_map")
-    worst_row = next(
-        (r for r in (map_stats.get("maps") or [])
-         if r.get("map") == worst and (r.get("played") or 0) >= cfg.MAP_USABLE_MIN),
-        None,
-    )
-    if worst_row and as_float(worst_row.get("win_rate_pct")) is not None:
-        wr = float(worst_row["win_rate_pct"])
-        if wr < cfg.FOCUS_WEAK_MAP_WR:
-            add("Map weakness", f"{worst} WR", f"{wr}%", f">{cfg.FOCUS_WEAK_MAP_WR}%",
-                f"{worst} demo review", "Harita havuzunda zayıf link.")
-
-    form10 = compute_recent_form({"matches": matches}, count=10)
-    rec = form10.get("record", "")
-    if isinstance(rec, str) and rec.count("L") >= 6:
-        add("Session discipline", "Son 10 form", rec, "Daha dengeli session",
-            "Günde max 2 maç kuralı", "Tilt/fatigue riski.")
-
-    kd = as_float(summary.get("avg_kd_ratio"))
-    wr_all = as_float(summary.get("win_rate_pct"))
-    if kd is not None and kd >= 1.1 and wr_all is not None and wr_all < 48:
-        add("Impact conversion", "K/D vs WR", f"K/D {kd}, WR {wr_all}%",
-            "WR > 50%", "Round win trade review", "İyi frag ama round kazanma düşük.")
-
     imp = impact or {}
     if imp.get("reliable"):
         untraded = as_float(imp.get("untraded_death_pct"))
@@ -109,7 +85,31 @@ def analyze_focus_areas(
                 "Kill sonrası reset zayıf.",
             )
 
-    return {"areas": areas[:5]}
+    worst = map_stats.get("worst_map")
+    worst_row = next(
+        (r for r in (map_stats.get("maps") or [])
+         if r.get("map") == worst and (r.get("played") or 0) >= cfg.MAP_USABLE_MIN),
+        None,
+    )
+    if worst_row and as_float(worst_row.get("win_rate_pct")) is not None:
+        wr = float(worst_row["win_rate_pct"])
+        if wr < cfg.FOCUS_WEAK_MAP_WR:
+            add("Map weakness", f"{worst} WR", f"{wr}%", f">{cfg.FOCUS_WEAK_MAP_WR}%",
+                f"{worst} demo review", "Harita havuzunda zayıf link.")
+
+    form10 = compute_recent_form({"matches": matches}, count=10)
+    rec = form10.get("record", "")
+    if isinstance(rec, str) and rec.count("L") >= 6:
+        add("Session discipline", "Son 10 form", rec, "Daha dengeli session",
+            "Günde max 2 maç kuralı", "Tilt/fatigue riski.")
+
+    kd = as_float(summary.get("avg_kd_ratio"))
+    wr_all = as_float(summary.get("win_rate_pct"))
+    if kd is not None and kd >= 1.1 and wr_all is not None and wr_all < 48:
+        add("Impact conversion", "K/D vs WR", f"K/D {kd}, WR {wr_all}%",
+            "WR > 50%", "Round win trade review", "İyi frag ama round kazanma düşük.")
+
+    return {"areas": areas[:6]}
 
 
 def render_focus_areas_markdown(section: dict[str, Any]) -> list[str]:
