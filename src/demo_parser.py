@@ -9,8 +9,8 @@ from typing import Any
 
 from src.config import MISSING_DATA_LABEL
 
-DEMO_EXTENSIONS = (".dem", ".dem.gz", ".dem.zst", ".zst")
-COMPRESSED_EXTENSIONS = (".dem.gz", ".dem.zst", ".zst")
+DEMO_EXTENSIONS = (".dem", ".dem.gz", ".dem.zst", ".zst", ".gz")
+COMPRESSED_EXTENSIONS = (".dem.gz", ".dem.zst", ".zst", ".gz")
 MATCH_ID_RE = re.compile(
     r"1-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
     re.I,
@@ -170,7 +170,7 @@ def _is_native_dem(filename: str) -> bool:
     name = filename.lower()
     if name.endswith(".dem.gz") or name.endswith(".dem.zst"):
         return False
-    if name.endswith(".zst"):
+    if name.endswith(".zst") or name.endswith(".gz"):
         return False
     return name.endswith(".dem")
 
@@ -184,6 +184,8 @@ def _decompressed_dem_path(compressed_path: Path) -> Path:
         return compressed_path.with_name(name[:-3])
     if lower.endswith(".zst"):
         return compressed_path.with_name(f"{name[:-4]}.dem")
+    if lower.endswith(".gz") and not lower.endswith(".dem.gz"):
+        return compressed_path.with_name(f"{name[:-3]}.dem")
     return compressed_path
 
 
@@ -223,7 +225,9 @@ def extract_compressed_demo(compressed_path: Path) -> dict[str, Any]:
             dctx = zstd.ZstdDecompressor()
             with compressed_path.open("rb") as f_in, out_path.open("wb") as f_out:
                 dctx.copy_stream(f_in, f_out)
-        elif name_lower.endswith(".dem.gz"):
+        elif name_lower.endswith(".dem.gz") or (
+            name_lower.endswith(".gz") and not name_lower.endswith(".dem.gz")
+        ):
             with gzip.open(compressed_path, "rb") as f_in, out_path.open("wb") as f_out:
                 shutil.copyfileobj(f_in, f_out)
         else:

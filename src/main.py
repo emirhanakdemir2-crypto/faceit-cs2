@@ -40,6 +40,7 @@ from src.metrics import (
 from src.normalizer import normalize_collected_data
 from src.period_analysis import compare_periods, split_matches_into_periods
 from src.report_writer import write_markdown_report
+from src.tara_export import copy_tara_to_clipboard, write_tara_export
 from src.session_coach import (
     build_session_coach,
     load_cached_baseline,
@@ -88,6 +89,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--debug-demo", action="store_true",
         help="Demo parser debug raporu (data/reports/)",
     )
+    parser.add_argument(
+        "--tara", action="store_true",
+        help="FACEIT + demo mechanics + ChatGPT tara raporu (tek komut)",
+    )
     return parser.parse_args(argv)
 
 
@@ -104,6 +109,12 @@ def _print_summary_panel(**kwargs: Any) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     nickname = args.nickname.strip()
+
+    if args.tara:
+        if not args.demo_folder:
+            args.demo_folder = str(DEMOS_DIR)
+        args.mechanics = True
+
     days = max(7, min(args.days if args.days is not None else DEFAULT_DAYS, 365))
     match_count = max(
         1, min(args.matches if args.matches is not None else DEFAULT_MATCH_COUNT, MAX_MATCH_COUNT),
@@ -156,6 +167,8 @@ def main(argv: list[str] | None = None) -> int:
         console.print("AI export: [green]açık[/green]")
     if args.mechanics:
         console.print("Mechanics Lab: [green]açık[/green]")
+    if args.tara:
+        console.print("Tara modu: [green]açık[/green]")
     if args.debug_demo:
         console.print("Demo debug: [green]açık[/green]")
     console.print()
@@ -245,6 +258,7 @@ def main(argv: list[str] | None = None) -> int:
     demo_analysis = scan_demo_folder(demo_folder, known_match_ids=known_ids)
 
     mechanics_lab: dict[str, Any] | None = None
+    demo_note: str | None = None
     if args.mechanics:
         mechanics_lab = run_mechanics_lab(
             demo_folder,
@@ -252,6 +266,10 @@ def main(argv: list[str] | None = None) -> int:
             debug_demo=args.debug_demo,
             debug_report_dir=REPORTS_DIR,
         )
+        if mechanics_lab.get("status") == "unavailable":
+            demo_note = "Demo bulunamadı, sadece FACEIT raporu üretildi."
+            if not args.tara:
+                console.print(f"[yellow]{demo_note}[/yellow]")
 
     safe_name = nickname.lower()
     if args.post_session:
@@ -353,6 +371,36 @@ def main(argv: list[str] | None = None) -> int:
         session_only=form_only or args.post_session,
     )
     report_path.write_text(report_md, encoding="utf-8")
+
+    tara_path: Path | None = None
+    clipboard_ok = False
+    if args.tara:
+        processed_payload["mechanics_lab"] = mechanics_lab
+        tara_path = write_tara_export(
+            nickname,
+            processed_payload,
+            AI_EXPORTS_DIR,
+            demo_note=demo_note,
+        )
+        tara_content = tara_path.read_text(encoding="utf-8")
+        clipboard_ok = copy_tara_to_clipboard(tara_content)
+
+    if args.tara:
+        console.print()
+        console.print("[bold green]Tara tamamlandı.[/bold green]")
+        console.print(f"Detaylı rapor: {report_path.resolve()}")
+        if tara_path:
+            console.print(f"ChatGPT raporu: {tara_path.resolve()}")
+        if demo_note:
+            console.print(f"[yellow]{demo_note}[/yellow]")
+        if clipboard_ok:
+            console.print("Panoya kopyalandı.")
+        else:
+            console.print("Panoya kopyalanamadı, dosyadan kopyalayın.")
+        if not raw.get("player"):
+            console.print("[yellow]Oyuncu verisi alınamadı; rapor kısıtlı oluşturuldu.[/yellow]")
+            return 1
+        return 0
 
     panel: dict[str, Any] = {
         "Oyuncu": nickname,

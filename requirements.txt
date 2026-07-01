@@ -5,4 +5,5 @@ rich>=13.7.0
 google-genai>=1.0.0
 # Opsiyonel — demo mekanik analizi için: pip install demoparser2
 demoparser2>=0.36.0
-zstandard>=0.22.0
+# Opsiyonel — tara modunda panoya kopyalama
+pyperclip>=1.8.2
