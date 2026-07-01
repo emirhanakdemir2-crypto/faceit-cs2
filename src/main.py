@@ -40,7 +40,8 @@ from src.metrics import (
 from src.normalizer import normalize_collected_data
 from src.period_analysis import compare_periods, split_matches_into_periods
 from src.report_writer import write_markdown_report
-from src.tara_export import copy_tara_to_clipboard, write_tara_export
+from src.analytics_suite import build_analytics_suite, write_suite_report
+from src.dashboard_export import write_dashboard_html
 from src.session_coach import (
     build_session_coach,
     load_cached_baseline,
@@ -91,7 +92,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--tara", action="store_true",
-        help="FACEIT + demo mechanics + ChatGPT tara raporu (tek komut)",
+        help="FACEIT + demo mechanics + analytics suite + ChatGPT tara raporu",
+    )
+    parser.add_argument(
+        "--suite", action="store_true",
+        help="Coach Analytics Suite raporu + dashboard HTML",
     )
     return parser.parse_args(argv)
 
@@ -111,6 +116,12 @@ def main(argv: list[str] | None = None) -> int:
     nickname = args.nickname.strip()
 
     if args.tara:
+        if not args.demo_folder:
+            args.demo_folder = str(DEMOS_DIR)
+        args.mechanics = True
+        args.suite = True
+
+    if args.suite:
         if not args.demo_folder:
             args.demo_folder = str(DEMOS_DIR)
         args.mechanics = True
@@ -167,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
         console.print("AI export: [green]açık[/green]")
     if args.mechanics:
         console.print("Mechanics Lab: [green]açık[/green]")
+    if args.suite:
+        console.print("Analytics Suite: [green]açık[/green]")
     if args.tara:
         console.print("Tara modu: [green]açık[/green]")
     if args.debug_demo:
@@ -372,10 +385,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     report_path.write_text(report_md, encoding="utf-8")
 
+    suite_data: dict[str, Any] | None = None
+    suite_path: Path | None = None
+    dashboard_path: Path | None = None
     tara_path: Path | None = None
     clipboard_ok = False
-    if args.tara:
+
+    if args.suite or args.tara:
         processed_payload["mechanics_lab"] = mechanics_lab
+        suite_data = build_analytics_suite(
+            processed_payload,
+            memory=memory,
+            demo_folder=demo_folder,
+        )
+        processed_payload["analytics_suite"] = suite_data
+        suite_path = write_suite_report(nickname, suite_data, REPORTS_DIR)
+        dashboard_path = write_dashboard_html(suite_data, REPORTS_DIR, nickname)
+
+    if args.tara:
+        from src.tara_export import copy_tara_to_clipboard, write_tara_export
         tara_path = write_tara_export(
             nickname,
             processed_payload,
@@ -389,6 +417,10 @@ def main(argv: list[str] | None = None) -> int:
         console.print()
         console.print("[bold green]Tara tamamlandı.[/bold green]")
         console.print(f"Detaylı rapor: {report_path.resolve()}")
+        if suite_path:
+            console.print(f"Suite raporu: {suite_path.resolve()}")
+        if dashboard_path:
+            console.print(f"Dashboard HTML: {dashboard_path.resolve()}")
         if tara_path:
             console.print(f"ChatGPT raporu: {tara_path.resolve()}")
         if demo_note:
@@ -401,6 +433,17 @@ def main(argv: list[str] | None = None) -> int:
             console.print("[yellow]Oyuncu verisi alınamadı; rapor kısıtlı oluşturuldu.[/yellow]")
             return 1
         return 0
+
+    if args.suite:
+        console.print()
+        console.print("[bold green]Analytics Suite tamamlandı.[/bold green]")
+        console.print(f"Detaylı rapor: {report_path.resolve()}")
+        if suite_path:
+            console.print(f"Suite raporu: {suite_path.resolve()}")
+        if dashboard_path:
+            console.print(f"Dashboard HTML: {dashboard_path.resolve()}")
+        if demo_note:
+            console.print(f"[yellow]{demo_note}[/yellow]")
 
     panel: dict[str, Any] = {
         "Oyuncu": nickname,
