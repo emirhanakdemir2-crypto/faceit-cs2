@@ -119,13 +119,38 @@ def _session_stats(session: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def analyze_sessions(matches: list[dict[str, Any]]) -> dict[str, Any]:
+def analyze_sessions(
+    matches: list[dict[str, Any]],
+    impact: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     sessions = _group_sessions(matches)
     analyzed = [_session_stats(s) for s in sessions[:15]]
     latest_notes: list[str] = []
     if analyzed:
         latest_notes = analyzed[0].get("notes") or []
-    return {"sessions": analyzed, "latest_notes": latest_notes}
+
+    death_quality_summary = "unavailable"
+    if impact and impact.get("reliable"):
+        parts: list[str] = []
+        untraded = impact.get("untraded_death_pct")
+        early = impact.get("early_death_pct")
+        surv = impact.get("post_kill_survival_rate_5s")
+        if isinstance(untraded, (int, float)):
+            parts.append(f"untraded death {untraded}%")
+        if isinstance(early, (int, float)):
+            parts.append(f"early death {early}%")
+        if isinstance(surv, (int, float)):
+            parts.append(f"post-kill survival 5s {surv}%")
+        commentary = impact.get("commentary") or []
+        if commentary:
+            parts.append(commentary[0])
+        death_quality_summary = "; ".join(parts) if parts else "Demo death quality verisi mevcut."
+
+    return {
+        "sessions": analyzed,
+        "latest_notes": latest_notes,
+        "death_quality_summary": metric(death_quality_summary, source=SOURCE_DERIVED),
+    }
 
 
 def render_sessions_markdown(section: dict[str, Any]) -> list[str]:
@@ -149,5 +174,9 @@ def render_sessions_markdown(section: dict[str, Any]) -> list[str]:
         lines.append("")
         for n in section["latest_notes"]:
             lines.append(f"- {n}")
+        lines.append("")
+    dq = section.get("death_quality_summary")
+    if dq and fmt_simple(dq) != MISSING_DATA_LABEL:
+        lines.append(f"**Death quality (demo):** {fmt_simple(dq)}")
         lines.append("")
     return lines

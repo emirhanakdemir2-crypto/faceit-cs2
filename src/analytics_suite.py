@@ -36,18 +36,19 @@ def build_analytics_suite(
     mechanics_lab = processed_payload.get("mechanics_lab") or {}
     agg = mechanics_lab.get("aggregated") or {}
     mech = agg.get("mechanics") or {}
+    impact = agg.get("impact") or {}
     form = processed_payload.get("recent_form") or {}
     period_insights = processed_payload.get("period_insights") or []
     session_coach = processed_payload.get("session_coach")
 
-    focus = analyze_focus_areas(summary, map_stats, mech, matches)
+    focus = analyze_focus_areas(summary, map_stats, mech, matches, impact)
     focus_list = focus.get("areas") or []
 
     sections = {
-        "home": analyze_home(profile, summary, form, matches, mech, focus_list, session_coach),
-        "dashboard": analyze_dashboard(nickname, profile, summary, map_stats, mech),
+        "home": analyze_home(profile, summary, form, matches, mech, focus_list, session_coach, impact),
+        "dashboard": analyze_dashboard(nickname, profile, summary, map_stats, mech, impact),
         "matches": analyze_matches(matches, mechanics_lab, summary, map_stats, mech),
-        "sessions": analyze_sessions(matches),
+        "sessions": analyze_sessions(matches, impact),
         "general": analyze_general(profile, summary, form, matches, period_insights, mech),
         "focus_areas": focus,
         "maps": analyze_maps(map_stats, matches, mechanics_lab),
@@ -55,7 +56,7 @@ def build_analytics_suite(
         "utility": analyze_utility(mechanics_lab, demo_folder),
         "training": analyze_training(focus_list, map_stats, mech),
         "achievements": analyze_achievements(summary, map_stats, matches, mech, memory),
-        "benchmarks": analyze_benchmarks(profile, summary, map_stats, mech, memory),
+        "benchmarks": analyze_benchmarks(profile, summary, map_stats, mech, memory, impact),
         "operation": analyze_operation(mechanics_lab, mech, map_stats),
         "data_library": analyze_data_library(nickname, memory),
         "ask_ai": {

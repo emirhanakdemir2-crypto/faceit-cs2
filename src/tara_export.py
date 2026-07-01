@@ -98,7 +98,11 @@ def _smg_commentary(mech: dict[str, Any]) -> str:
     return "SMG verisi yok."
 
 
-def derive_top_problems(mech: dict[str, Any], map_stats: dict[str, Any]) -> list[str]:
+def derive_top_problems(
+    mech: dict[str, Any],
+    map_stats: dict[str, Any],
+    impact: dict[str, Any] | None = None,
+) -> list[str]:
     """Metriklere göre en net 3 problem."""
     problems: list[str] = []
     ak = mech.get("ak_metrics") or {}
@@ -130,6 +134,15 @@ def derive_top_problems(mech: dict[str, Any], map_stats: dict[str, Any]) -> list
     worst = map_stats.get("worst_map")
     if len(problems) < 3 and worst and worst != MISSING_DATA_LABEL:
         problems.append(f"{worst} haritasında performans zayıf (min 10 maç).")
+
+    imp = impact or {}
+    if imp.get("reliable"):
+        untraded = imp.get("untraded_death_pct")
+        if isinstance(untraded, (int, float)) and untraded > 45 and len(problems) < 3:
+            problems.append("Untraded death oranı yüksek — yalnız ölümler fazla.")
+        early = imp.get("early_death_pct")
+        if isinstance(early, (int, float)) and early > 20 and len(problems) < 3:
+            problems.append("Erken ölüm oranı yüksek — round başı risk.")
 
     if not problems:
         problems.append("Belirgin mekanik problem tespit edilmedi; tutarlılık koru.")
@@ -177,6 +190,7 @@ def render_tara_markdown(
     mechanics_lab = processed_payload.get("mechanics_lab") or {}
     agg = mechanics_lab.get("aggregated") or {}
     mech = agg.get("mechanics") or {}
+    impact = agg.get("impact") or {}
     ak = mech.get("ak_metrics") or {}
     m4 = mech.get("m4_metrics") or {}
 
@@ -196,7 +210,7 @@ def render_tara_markdown(
 
     ak_note, m4_note = _ak_m4_commentary(ak, m4)
     pistol_stab, force_tol = _pistol_commentary(mech)
-    problems = derive_top_problems(mech, map_stats)
+    problems = derive_top_problems(mech, map_stats, impact)
     work_orders = derive_work_orders(mech, problems)
 
     deagle_shots = mech.get("deagle_total_shots", 0) or 0
@@ -317,7 +331,28 @@ def render_tara_markdown(
         "SMG verisi rifle/pistol yorumuna karıştırılmasın.",
         "",
         "## 7. Impact / Death Quality",
-        "Impact / Death Quality metrikleri henüz eklenmedi.",
+    ])
+    if impact.get("reliable"):
+        impact_comment = " ".join(impact.get("commentary") or [])[:400]
+        lines.extend([
+            f"- opening_kills: {_fmt(impact.get('opening_kills'))}",
+            f"- opening_deaths: {_fmt(impact.get('opening_deaths'))}",
+            f"- opening_duel_success_pct: {_pct(impact.get('opening_duel_success_pct'))}",
+            f"- trade_kills: {_fmt(impact.get('trade_kills'))}",
+            f"- traded_deaths: {_fmt(impact.get('traded_deaths'))}",
+            f"- untraded_deaths: {_fmt(impact.get('untraded_deaths'))}",
+            f"- untraded_death_pct: {_pct(impact.get('untraded_death_pct'))}",
+            f"- early_death_pct: {_pct(impact.get('early_death_pct'))}",
+            f"- death_after_kill_within_5s_pct: {_pct(impact.get('death_after_kill_within_5s_pct'))}",
+            f"- post_kill_survival_rate_5s: {_pct(impact.get('post_kill_survival_rate_5s'))}",
+            f"- round_impact_score: {_fmt(impact.get('round_impact_score_total'))} "
+            f"({_fmt(impact.get('round_impact_score_per_round'))}/round)",
+            f"- impact_rating: {_fmt(impact.get('impact_rating_0_100'))}",
+            f"- Kısa yorum: {impact_comment or 'Belirgin sinyal yok.'}",
+        ])
+    else:
+        lines.append("Impact / Death Quality için yeterli demo event verisi yok.")
+    lines.extend([
         "",
         "## 8. En Net 3 Problem",
     ])

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.coach_ratings import compute_aim_discipline, compute_mechanics_risk
+from src.coach_ratings import compute_aim_discipline, compute_impact_warning, compute_mechanics_risk
 from src.metrics import compute_recent_form
 from src.suite_common import SOURCE_DERIVED, SOURCE_FACEIT, fmt_simple, metric, metric_val
 
@@ -15,15 +15,22 @@ def analyze_home(
     mech: dict[str, Any],
     focus_areas: list[dict[str, Any]],
     session_coach: dict[str, Any] | None,
+    impact: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     form10 = compute_recent_form({"matches": matches}, count=10)
     mech_risk = compute_mechanics_risk(mech)
+    impact_warn = compute_impact_warning(impact or {})
     aim = compute_aim_discipline(mech)
 
     risk_band = "medium"
     risk_val = metric_val(mech_risk)
     if isinstance(risk_val, dict):
         risk_band = risk_val.get("band", "medium")
+    impact_val = metric_val(impact_warn)
+    if isinstance(impact_val, dict) and impact_val.get("band") == "high":
+        risk_band = "high"
+    elif isinstance(impact_val, dict) and impact_val.get("band") == "medium" and risk_band == "low":
+        risk_band = "medium"
 
     queue = "2–3 maç"
     if session_coach:
@@ -60,6 +67,7 @@ def analyze_home(
         "form_5": metric(form5.get("record"), source=SOURCE_FACEIT),
         "form_10": metric(form10.get("record"), source=SOURCE_FACEIT),
         "mechanics_warning": mech_risk,
+        "impact_warning": impact_warn,
         "aim_discipline": aim,
         "today_work": metric(work or ["5 dk warmup + 1 demo review"], source=SOURCE_DERIVED),
         "queue_decision": metric(queue, source=SOURCE_DERIVED),
@@ -87,6 +95,7 @@ def render_home_markdown(section: dict[str, Any]) -> list[str]:
         f"- Son 5 maç: {fmt_simple(section.get('form_5'))}",
         f"- Son 10 maç: {fmt_simple(section.get('form_10'))}",
         f"- Mechanics warning: {fmt_simple(section.get('mechanics_warning'))}",
+        f"- Impact warning: {fmt_simple(section.get('impact_warning'))}",
         f"- Bugünkü çalışma: {fmt_simple(section.get('today_work'))}",
         f"- Maç kararı: {fmt_simple(section.get('queue_decision'))}",
         "",

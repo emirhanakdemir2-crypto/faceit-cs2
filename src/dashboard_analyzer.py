@@ -5,10 +5,11 @@ from typing import Any
 from src.coach_ratings import (
     compute_aim_discipline,
     compute_coach_rating,
+    compute_impact_warning,
     compute_level10_gap,
     compute_mechanics_risk,
 )
-from src.suite_common import SOURCE_FACEIT, SOURCE_UNAVAILABLE, fmt_simple, metric
+from src.suite_common import SOURCE_DEMO, SOURCE_FACEIT, SOURCE_UNAVAILABLE, fmt_simple, metric
 
 
 def analyze_dashboard(
@@ -17,11 +18,18 @@ def analyze_dashboard(
     summary: dict[str, Any],
     map_stats: dict[str, Any],
     mech: dict[str, Any],
+    impact: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     coach = compute_coach_rating(summary, map_stats, mech)
     aim = compute_aim_discipline(mech)
     mech_risk = compute_mechanics_risk(mech)
     gap = compute_level10_gap(summary, map_stats, mech)
+    impact_warn = compute_impact_warning(impact or {})
+    impact_rating = (
+        impact.get("impact_rating_0_100")
+        if impact and impact.get("reliable")
+        else "unavailable"
+    )
 
     return {
         "nickname": metric(nickname, source=SOURCE_FACEIT),
@@ -45,6 +53,12 @@ def analyze_dashboard(
         "coach_rating": coach,
         "aim_discipline": aim,
         "mechanics_risk": mech_risk,
+        "impact_warning": impact_warn,
+        "impact_rating": metric(
+            impact_rating,
+            source=SOURCE_DEMO if impact and impact.get("reliable") else SOURCE_UNAVAILABLE,
+            confidence=impact.get("metrics_confidence", "none") if impact else "none",
+        ),
         "level10_gap_score": gap,
     }
 
@@ -70,6 +84,8 @@ def render_dashboard_markdown(section: dict[str, Any]) -> list[str]:
         f"- **Coach Rating:** {fmt_simple(section.get('coach_rating'))}",
         f"- **Aim Discipline:** {fmt_simple(section.get('aim_discipline'))}",
         f"- **Mechanics Risk:** {fmt_simple(section.get('mechanics_risk'))}",
+        f"- **Impact Rating:** {fmt_simple(section.get('impact_rating'))}",
+        f"- **Impact Warning:** {fmt_simple(section.get('impact_warning'))}",
         f"- **Level 10 Gap Score:** {fmt_simple(section.get('level10_gap_score'))}",
         "",
     ]

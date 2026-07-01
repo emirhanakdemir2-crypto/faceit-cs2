@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from src import suite_config as cfg
-from src.suite_common import SOURCE_DERIVED, SOURCE_DEMO, SOURCE_FACEIT, as_float, clamp_score, metric
+from src.suite_common import SOURCE_DERIVED, SOURCE_DEMO, SOURCE_FACEIT, SOURCE_UNAVAILABLE, as_float, clamp_score, metric
 
 
 def compute_coach_rating(
@@ -117,6 +117,39 @@ def compute_mechanics_risk(mech: dict[str, Any]) -> dict[str, Any]:
         {"score": clamp_score(risk), "band": band},
         source=SOURCE_DEMO,
         confidence="medium",
+    )
+
+
+def compute_impact_warning(impact: dict[str, Any]) -> dict[str, Any]:
+    if not impact.get("reliable"):
+        return metric("unavailable", source=SOURCE_UNAVAILABLE, confidence="none")
+
+    risk = 0.0
+    untraded = as_float(impact.get("untraded_death_pct"))
+    early = as_float(impact.get("early_death_pct"))
+    surv = as_float(impact.get("post_kill_survival_rate_5s"))
+    rating = as_float(impact.get("impact_rating_0_100"))
+
+    if untraded is not None:
+        risk += max(0, untraded - cfg.UNTRADED_DEATH_GOOD) * 0.9
+    if early is not None:
+        risk += max(0, early - cfg.EARLY_DEATH_GOOD) * 1.2
+    if surv is not None:
+        risk += max(0, cfg.POST_KILL_SURVIVAL_GOOD - surv) * 0.6
+    if rating is not None:
+        risk += max(0, cfg.IMPACT_RATING_OKAY - rating) * 0.5
+
+    band = "low"
+    if risk >= 35:
+        band = "high"
+    elif risk >= 18:
+        band = "medium"
+
+    conf = impact.get("metrics_confidence", "low")
+    return metric(
+        {"score": clamp_score(risk), "band": band},
+        source=SOURCE_DEMO,
+        confidence=conf if conf in ("low", "medium") else "low",
     )
 
 

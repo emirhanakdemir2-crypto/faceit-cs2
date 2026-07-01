@@ -16,6 +16,7 @@ def analyze_operation(
     m4_l = as_float((mech.get("m4_metrics") or {}).get("long_spray_pct"))
     sp = as_float(mech.get("starter_pistol_first_bullet_moving_pct"))
     weak = map_stats.get("worst_map")
+    impact = (mechanics_lab or {}).get("aggregated", {}).get("impact") or {}
 
     missions = [
         {
@@ -49,6 +50,40 @@ def analyze_operation(
             "progress": "manual tracking",
         },
     ]
+
+    untraded = as_float(impact.get("untraded_death_pct"))
+    early = as_float(impact.get("early_death_pct"))
+    surv = as_float(impact.get("post_kill_survival_rate_5s"))
+    if impact.get("reliable"):
+        missions.extend([
+            {
+                "name": f"Untraded death < {cfg.TARGET_UNTRADED_DEATH_PCT}%",
+                "status": _status(
+                    untraded is not None and untraded < cfg.TARGET_UNTRADED_DEATH_PCT,
+                    untraded is not None,
+                    untraded is None,
+                ),
+                "progress": f"{untraded}%" if untraded is not None else "no data",
+            },
+            {
+                "name": f"Early death < {cfg.TARGET_EARLY_DEATH_PCT}%",
+                "status": _status(
+                    early is not None and early < cfg.TARGET_EARLY_DEATH_PCT,
+                    early is not None,
+                    early is None,
+                ),
+                "progress": f"{early}%" if early is not None else "no data",
+            },
+            {
+                "name": f"Post-kill survival > {cfg.TARGET_POST_KILL_SURVIVAL_5S}%",
+                "status": _status(
+                    surv is not None and surv > cfg.TARGET_POST_KILL_SURVIVAL_5S,
+                    surv is not None,
+                    surv is None,
+                ),
+                "progress": f"{surv}%" if surv is not None else "no data",
+            },
+        ])
 
     return {
         "title": "Operation: Level 10 Push",

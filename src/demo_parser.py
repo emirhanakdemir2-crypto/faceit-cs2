@@ -1325,6 +1325,17 @@ def parse_demo_basic(
         if matched and kd["kills"] + kd["deaths"] > 0 and confidence == "none":
             confidence = "low"
 
+        if matched:
+            from src.impact_analyzer import analyze_impact_from_parser
+
+            impact = analyze_impact_from_parser(
+                parser, nickname, matched_name, matched_steamid,
+            )
+        else:
+            from src.impact_analyzer import _empty_impact
+
+            impact = _empty_impact(reason="Oyuncu demo içinde eşleşmedi.")
+
         result = {
             **base,
             "status": "ok",
@@ -1357,6 +1368,7 @@ def parse_demo_basic(
             "velocity_fields_found": mechanics.get("velocity_fields_found", False),
             "shots_with_velocity": mechanics.get("shots_with_velocity", 0),
             "mechanics": mechanics,
+            "impact": impact,
             "events_found": events[:15],
         }
         if debug:
@@ -1457,6 +1469,7 @@ def build_mechanics_summary(
     per_demo_cards = []
     for d in parsed_demos:
         mech = d.get("mechanics") or {}
+        imp = d.get("impact") or {}
         per_demo_cards.append({
             "demo_file": d.get("demo_file"),
             "player_matched": d.get("player_matched"),
@@ -1477,7 +1490,30 @@ def build_mechanics_summary(
             "confidence": mech.get("rifle_metrics_confidence", mech.get("metrics_confidence", "none")),
             "pistol_confidence": mech.get("pistol_metrics_confidence", "none"),
             "status": d.get("status"),
+            "opening_kills": imp.get("opening_kills"),
+            "opening_deaths": imp.get("opening_deaths"),
+            "opening_success_pct": imp.get("opening_duel_success_pct"),
+            "trade_kills": imp.get("trade_kills"),
+            "traded_deaths": imp.get("traded_deaths"),
+            "untraded_deaths": imp.get("untraded_deaths"),
+            "untraded_death_pct": imp.get("untraded_death_pct"),
+            "early_death_pct": imp.get("early_death_pct"),
+            "death_after_kill_5s_pct": imp.get("death_after_kill_within_5s_pct"),
+            "post_kill_survival_rate_5s": imp.get("post_kill_survival_rate_5s"),
+            "impact_rating_0_100": imp.get("impact_rating_0_100"),
+            "impact_confidence": imp.get("metrics_confidence", "none"),
         })
+
+    demo_impacts = [d.get("impact") or {} for d in ok_demos]
+    from src.impact_analyzer import combine_impact_metrics
+
+    aggregated["impact"] = combine_impact_metrics(demo_impacts)
+    if aggregated["impact"].get("debug") is None:
+        for d in ok_demos:
+            dbg = (d.get("impact") or {}).get("debug")
+            if dbg:
+                aggregated["impact"]["debug"] = dbg
+                break
 
     combined_rifle = combine_mechanics_metrics(reliable_mech, prefix="rifle_")
     combined_general = combine_mechanics_metrics(reliable_mech, prefix="")

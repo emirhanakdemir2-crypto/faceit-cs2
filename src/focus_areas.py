@@ -12,6 +12,7 @@ def analyze_focus_areas(
     map_stats: dict[str, Any],
     mech: dict[str, Any],
     matches: list[dict[str, Any]],
+    impact: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     areas: list[dict[str, Any]] = []
     ak = mech.get("ak_metrics") or {}
@@ -74,6 +75,39 @@ def analyze_focus_areas(
     if kd is not None and kd >= 1.1 and wr_all is not None and wr_all < 48:
         add("Impact conversion", "K/D vs WR", f"K/D {kd}, WR {wr_all}%",
             "WR > 50%", "Round win trade review", "İyi frag ama round kazanma düşük.")
+
+    imp = impact or {}
+    if imp.get("reliable"):
+        untraded = as_float(imp.get("untraded_death_pct"))
+        if untraded is not None and untraded > cfg.UNTRADED_DEATH_OKAY:
+            add(
+                "Death quality — untraded deaths",
+                "untraded_death_pct",
+                f"{untraded}%",
+                f"< {cfg.TARGET_UNTRADED_DEATH_PCT}%",
+                "Trade mesafesi + 2nd entry drill",
+                "Yalnız ölümler fazla; takım trade'i kaçırıyor.",
+            )
+        early = as_float(imp.get("early_death_pct"))
+        if early is not None and early > cfg.EARLY_DEATH_OKAY:
+            add(
+                "Death quality — early deaths",
+                "early_death_pct",
+                f"{early}%",
+                f"< {cfg.TARGET_EARLY_DEATH_PCT}%",
+                "Default timing + info review",
+                "Round başında erken ölüm oranı yüksek.",
+            )
+        surv = as_float(imp.get("post_kill_survival_rate_5s"))
+        if surv is not None and surv < cfg.POST_KILL_SURVIVAL_OKAY:
+            add(
+                "Death quality — post-kill reset",
+                "post_kill_survival_rate_5s",
+                f"{surv}%",
+                f"> {cfg.TARGET_POST_KILL_SURVIVAL_5S}%",
+                "Kill sonrası pozisyon + cover drill",
+                "Kill sonrası reset zayıf.",
+            )
 
     return {"areas": areas[:5]}
 

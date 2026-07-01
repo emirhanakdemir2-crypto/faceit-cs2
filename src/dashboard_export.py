@@ -85,6 +85,8 @@ def render_dashboard_html(suite: dict[str, Any]) -> str:
     <div class="card"><div class="label">FACEIT Risk</div><div class="value">{_esc(home.get('faceit_risk'))}</div></div>
     <div class="card"><div class="label">Coach Rating</div><div class="value">{_esc(dash.get('coach_rating'))}</div></div>
     <div class="card"><div class="label">Aim Discipline</div><div class="value">{_esc(dash.get('aim_discipline'))}</div></div>
+    <div class="card"><div class="label">Impact Rating</div><div class="value">{_esc(dash.get('impact_rating'))}</div></div>
+    <div class="card"><div class="label">Impact Warning</div><div class="value">{_esc(dash.get('impact_warning'))}</div></div>
   </div>
   <ul class="commentary">
     {''.join(f'<li>{_esc(n)}</li>' for n in (home.get('commentary') or []))}

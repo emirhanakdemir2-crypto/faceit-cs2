@@ -11,6 +11,7 @@ from src.demo_parser import (
     prepare_demos_for_parsing,
     write_demo_debug_report,
 )
+from src.impact_analyzer import write_impact_debug_report
 
 
 def run_mechanics_lab(
@@ -56,6 +57,13 @@ def run_mechanics_lab(
     )
     if debug_paths:
         summary["debug_report_paths"] = debug_paths
+    agg = summary.get("aggregated") or {}
+    impact = agg.get("impact") or {}
+    if debug_report_dir is not None and impact:
+        safe = nickname.lower()
+        impact_path = debug_report_dir / f"{safe}_impact_debug_latest.md"
+        write_impact_debug_report(impact_path, impact, nickname)
+        summary["impact_debug_report_path"] = str(impact_path.resolve())
     return summary
 
 
@@ -278,6 +286,59 @@ def render_mechanics_lab_markdown(lab: dict[str, Any]) -> list[str]:
     else:
         lines.append(f"* Kill silahları: {_fmt(', '.join(agg.get('weapons') or []) or MISSING_DATA_LABEL)}")
     lines.append("")
+
+    # --- Impact / Death Quality ---
+    lines.extend(["### Impact / Death Quality", ""])
+    impact = agg.get("impact") or {}
+    if cards:
+        lines.extend([
+            "| Demo | K/D | Rounds | Open K/D | Open % | Trade K | Untraded % | Early % | Post-kill surv 5s | Impact | Güven |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ])
+        for card in cards:
+            if card.get("status") != "ok":
+                continue
+            k, d = card.get("kills", 0), card.get("deaths", 0)
+            kd_str = f"{k}/{d}" if d else f"{k}/0"
+            open_kd = f"{_fmt(card.get('opening_kills'))}/{_fmt(card.get('opening_deaths'))}"
+            lines.append(
+                f"| `{_fmt(card.get('demo_file'))}` | {kd_str} | {_fmt(card.get('round_count'))} | "
+                f"{open_kd} | {_fmt(card.get('opening_success_pct'))} | {_fmt(card.get('trade_kills'))} | "
+                f"{_fmt(card.get('untraded_death_pct'))} | {_fmt(card.get('early_death_pct'))} | "
+                f"{_fmt(card.get('post_kill_survival_rate_5s'))} | {_fmt(card.get('impact_rating_0_100'))} | "
+                f"{_fmt(card.get('impact_confidence'))} |"
+            )
+        lines.append("")
+
+    if impact.get("reliable"):
+        lines.extend([
+            "**Combined:**",
+            "",
+            f"* opening_kills / deaths: {_fmt(impact.get('opening_kills'))} / {_fmt(impact.get('opening_deaths'))}",
+            f"* opening_duel_success_pct: {_fmt(impact.get('opening_duel_success_pct'))}",
+            f"* trade_kills / traded / untraded: {_fmt(impact.get('trade_kills'))} / "
+            f"{_fmt(impact.get('traded_deaths'))} / {_fmt(impact.get('untraded_deaths'))}",
+            f"* untraded_death_pct: {_fmt(impact.get('untraded_death_pct'))}",
+            f"* early_death_pct: {_fmt(impact.get('early_death_pct'))}",
+            f"* death_after_kill_within_5s_pct: {_fmt(impact.get('death_after_kill_within_5s_pct'))}",
+            f"* post_kill_survival_rate_5s: {_fmt(impact.get('post_kill_survival_rate_5s'))}",
+            f"* round_impact_score: {_fmt(impact.get('round_impact_score_total'))} "
+            f"({_fmt(impact.get('round_impact_score_per_round'))}/round)",
+            f"* impact_rating_0_100: {_fmt(impact.get('impact_rating_0_100'))}",
+            f"* unnecessary_death_score: {_fmt(impact.get('unnecessary_death_score'))}",
+            "",
+        ])
+        lines.extend(_bullet_list(impact.get("commentary") or []))
+    else:
+        reason = impact.get("reason") or "Impact / Death Quality için yeterli demo event verisi yok."
+        lines.append(f"_{reason}_")
+        lines.append("")
+
+    if lab.get("impact_debug_report_path"):
+        lines.extend([
+            f"* Impact debug: `{lab['impact_debug_report_path']}`",
+            "",
+        ])
 
     # --- Confidence / Limitations ---
     lines.extend([

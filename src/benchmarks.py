@@ -28,6 +28,7 @@ def analyze_benchmarks(
     map_stats: dict[str, Any],
     mech: dict[str, Any],
     memory: dict[str, Any] | None,
+    impact: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     level = profile.get("skill_level")
     rows: list[dict[str, Any]] = []
@@ -69,6 +70,49 @@ def analyze_benchmarks(
     if memory and "düşük" in str(memory.get("unchanged_problems", "")):
         session_disc = "below target"
     row("Session discipline", "estimated", "stable sessions", session_disc)
+
+    imp = impact or {}
+    if imp.get("reliable"):
+        opening = as_float(imp.get("opening_duel_success_pct"))
+        untraded = as_float(imp.get("untraded_death_pct"))
+        early = as_float(imp.get("early_death_pct"))
+        surv = as_float(imp.get("post_kill_survival_rate_5s"))
+        irating = as_float(imp.get("impact_rating_0_100"))
+        if opening is not None:
+            row(
+                "Opening duel success",
+                f"{opening}%",
+                f">= {cfg.OPENING_DUEL_GOOD}%",
+                _verdict(opening, cfg.OPENING_DUEL_GOOD),
+            )
+        if untraded is not None:
+            row(
+                "Untraded death %",
+                f"{untraded}%",
+                f"< {cfg.UNTRADED_DEATH_GOOD}%",
+                _verdict(untraded, cfg.UNTRADED_DEATH_GOOD, higher_is_better=False),
+            )
+        if early is not None:
+            row(
+                "Early death %",
+                f"{early}%",
+                f"< {cfg.EARLY_DEATH_GOOD}%",
+                _verdict(early, cfg.EARLY_DEATH_GOOD, higher_is_better=False),
+            )
+        if surv is not None:
+            row(
+                "Post-kill survival 5s",
+                f"{surv}%",
+                f"> {cfg.POST_KILL_SURVIVAL_GOOD}%",
+                _verdict(surv, cfg.POST_KILL_SURVIVAL_GOOD),
+            )
+        if irating is not None:
+            row(
+                "Impact rating",
+                irating,
+                f">= {cfg.IMPACT_RATING_GOOD}",
+                _verdict(irating, cfg.IMPACT_RATING_GOOD),
+            )
 
     prev_kd = None
     if memory and memory.get("previous_analysis_date"):

@@ -48,11 +48,13 @@ def analyze_matches(
         demo_parsed = False
         demo_file = None
         source = SOURCE_FACEIT
+        demo_impact = None
         mid = m.get("match_id")
         for d in demos:
             if d.get("match_id") == mid and d.get("status") == "ok":
                 demo_parsed = True
                 demo_file = d.get("demo_file")
+                demo_impact = d.get("impact")
                 source = SOURCE_FACEIT
                 break
 
@@ -96,6 +98,12 @@ def analyze_matches(
             "coach_rating": coach,
             "aim_discipline": aim,
             "mechanics_warning": metric(mech_warn, source=SOURCE_DEMO if mech_warn else SOURCE_DERIVED),
+            "impact_rating": metric(
+                demo_impact.get("impact_rating_0_100")
+                if demo_impact and demo_impact.get("reliable")
+                else "unavailable",
+                source=SOURCE_DEMO if demo_impact and demo_impact.get("reliable") else SOURCE_UNAVAILABLE,
+            ),
             "source": metric(source, source=source),
             "verdict": metric(_match_verdict(m, mech_warn), source=SOURCE_DERIVED),
         })
@@ -109,6 +117,7 @@ def analyze_matches(
         )
         if already:
             continue
+        imp = d.get("impact") or {}
         rows.append({
             "date": metric("unavailable", source=SOURCE_UNAVAILABLE),
             "map": metric("unavailable", source=SOURCE_UNAVAILABLE),
@@ -125,6 +134,10 @@ def analyze_matches(
             "coach_rating": metric("unavailable", source=SOURCE_UNAVAILABLE),
             "aim_discipline": metric("unavailable", source=SOURCE_UNAVAILABLE),
             "mechanics_warning": metric(False, source=SOURCE_DEMO),
+            "impact_rating": metric(
+                imp.get("impact_rating_0_100") if imp.get("reliable") else "unavailable",
+                source=SOURCE_DEMO if imp.get("reliable") else SOURCE_UNAVAILABLE,
+            ),
             "source": metric(SOURCE_DEMO, source=SOURCE_DEMO),
             "verdict": metric("uploaded demo", source=SOURCE_DEMO),
         })
@@ -136,8 +149,8 @@ def render_matches_markdown(section: dict[str, Any]) -> list[str]:
     lines = [
         "## Matches",
         "",
-        "| Date | Map | Result | K-A-D | K/D | ADR | HS% | Demo | Verdict | Source |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Date | Map | Result | K-A-D | K/D | ADR | HS% | Demo | Impact | Verdict | Source |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in section.get("rows") or []:
         from src.suite_common import fmt_simple
@@ -146,7 +159,8 @@ def render_matches_markdown(section: dict[str, Any]) -> list[str]:
             f"| {fmt_simple(row.get('date'))} | {fmt_simple(row.get('map'))} | "
             f"{fmt_simple(row.get('result'))} | {fmt_simple(row.get('kda'))} | "
             f"{fmt_simple(row.get('kd'))} | {fmt_simple(row.get('adr'))} | "
-            f"{fmt_simple(row.get('hs_pct'))} | {demo} | {fmt_simple(row.get('verdict'))} | "
+            f"{fmt_simple(row.get('hs_pct'))} | {demo} | {fmt_simple(row.get('impact_rating'))} | "
+            f"{fmt_simple(row.get('verdict'))} | "
             f"{fmt_simple(row.get('source'))} |"
         )
     lines.append("")
