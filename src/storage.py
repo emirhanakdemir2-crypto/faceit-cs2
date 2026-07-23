@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from src.config import DB_PATH, MISSING_DATA_LABEL
+
+COUNTER_STRAFE_SOURCE_USER_ENTRY = "user_entry"
+
+
+class CounterStrafeSessionError(ValueError):
+    """Geçersiz counter-strafe oturum verisi."""
 
 
 def _now_iso() -> str:
@@ -78,6 +85,7 @@ def init_db() -> None:
             """
         )
         _migrate_schema(conn)
+        _migrate_counter_strafe_sessions(conn)
 
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:
@@ -91,6 +99,239 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     ):
         if name not in cols:
             conn.execute(f"ALTER TABLE analyses ADD COLUMN {name} {col_type}")
+
+
+def _migrate_counter_strafe_sessions(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS counter_strafe_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nickname TEXT NOT NULL CHECK(length(trim(nickname)) > 0),
+            session_date TEXT NOT NULL CHECK(length(trim(session_date)) > 0),
+            drill_name TEXT NOT NULL CHECK(length(trim(drill_name)) > 0),
+            kills INTEGER NOT NULL CHECK(kills > 0),
+            avg_kill_score REAL NOT NULL CHECK(avg_kill_score >= 0),
+            avg_speed REAL NOT NULL CHECK(avg_speed >= 0),
+            avg_timing_ms REAL NOT NULL CHECK(avg_timing_ms >= 0),
+            avg_technique_pct REAL NOT NULL
+                CHECK(avg_technique_pct >= 0 AND avg_technique_pct <= 100),
+            hit_accuracy_pct REAL NOT NULL
+                CHECK(hit_accuracy_pct >= 0 AND hit_accuracy_pct <= 100),
+            notes TEXT,
+            source TEXT NOT NULL DEFAULT 'user_entry'
+                CHECK(source = 'user_entry'),
+            evidence_path TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _require_non_empty_text(value: Any, field_name: str) -> str:
+    if value is None:
+        raise CounterStrafeSessionError(f"{field_name} boş olamaz.")
+    text = str(value).strip()
+    if not text:
+        raise CounterStrafeSessionError(f"{field_name} boş olamaz.")
+    return text
+
+
+def _require_iso_date(value: Any, field_name: str) -> str:
+    text = _require_non_empty_text(value, field_name)
+    if len(text) != 10 or text[4] != "-" or text[7] != "-":
+        raise CounterStrafeSessionError(f"{field_name} YYYY-MM-DD biçiminde olmalı.")
+    try:
+        parsed = date.fromisoformat(text)
+    except ValueError as exc:
+        raise CounterStrafeSessionError(f"{field_name} geçerli bir tarih olmalı.") from exc
+    normalized = parsed.isoformat()
+    if normalized != text:
+        raise CounterStrafeSessionError(f"{field_name} YYYY-MM-DD biçiminde olmalı.")
+    return normalized
+
+
+def _require_positive_int(value: Any, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise CounterStrafeSessionError(f"{field_name} pozitif tam sayı olmalı.")
+    if not isinstance(value, int):
+        raise CounterStrafeSessionError(f"{field_name} pozitif tam sayı olmalı.")
+    if value <= 0:
+        raise CounterStrafeSessionError(f"{field_name} sıfırdan büyük olmalı.")
+    return value
+
+
+def _require_finite_number(value: Any, field_name: str) -> float:
+    if isinstance(value, bool):
+        raise CounterStrafeSessionError(f"{field_name} geçerli sayı olmalı.")
+    if isinstance(value, int):
+        number = float(value)
+    elif isinstance(value, float):
+        number = value
+    else:
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as exc:
+            raise CounterStrafeSessionError(f"{field_name} geçerli sayı olmalı.") from exc
+    if not math.isfinite(number):
+        raise CounterStrafeSessionError(f"{field_name} sonlu bir sayı olmalı.")
+    return number
+
+
+def _require_non_negative_number(value: Any, field_name: str) -> float:
+    number = _require_finite_number(value, field_name)
+    if number < 0:
+        raise CounterStrafeSessionError(f"{field_name} negatif olamaz.")
+    return number
+
+
+def _require_percentage(value: Any, field_name: str) -> float:
+    number = _require_non_negative_number(value, field_name)
+    if number > 100:
+        raise CounterStrafeSessionError(f"{field_name} 0–100 aralığında olmalı.")
+    return number
+
+
+def _validate_counter_strafe_session_payload(
+    *,
+    nickname: str,
+    session_date: str,
+    drill_name: str,
+    kills: int,
+    avg_kill_score: float,
+    avg_speed: float,
+    avg_timing_ms: float,
+    avg_technique_pct: float,
+    hit_accuracy_pct: float,
+    notes: str | None,
+    source: str,
+    evidence_path: str | None,
+) -> dict[str, Any]:
+    normalized_source = _require_non_empty_text(source, "source")
+    if normalized_source != COUNTER_STRAFE_SOURCE_USER_ENTRY:
+        raise CounterStrafeSessionError(
+            f"source yalnızca '{COUNTER_STRAFE_SOURCE_USER_ENTRY}' olabilir."
+        )
+
+    normalized_notes = None
+    if notes is not None:
+        normalized_notes = str(notes).strip() or None
+
+    normalized_evidence = None
+    if evidence_path is not None:
+        normalized_evidence = str(evidence_path).strip() or None
+
+    return {
+        "nickname": _require_non_empty_text(nickname, "nickname").lower(),
+        "session_date": _require_iso_date(session_date, "session_date"),
+        "drill_name": _require_non_empty_text(drill_name, "drill_name"),
+        "kills": _require_positive_int(kills, "kills"),
+        "avg_kill_score": _require_non_negative_number(avg_kill_score, "avg_kill_score"),
+        "avg_speed": _require_non_negative_number(avg_speed, "avg_speed"),
+        "avg_timing_ms": _require_non_negative_number(avg_timing_ms, "avg_timing_ms"),
+        "avg_technique_pct": _require_percentage(avg_technique_pct, "avg_technique_pct"),
+        "hit_accuracy_pct": _require_percentage(hit_accuracy_pct, "hit_accuracy_pct"),
+        "notes": normalized_notes,
+        "source": COUNTER_STRAFE_SOURCE_USER_ENTRY,
+        "evidence_path": normalized_evidence,
+    }
+
+
+def save_counter_strafe_session(
+    *,
+    nickname: str,
+    session_date: str,
+    drill_name: str,
+    kills: int,
+    avg_kill_score: float,
+    avg_speed: float,
+    avg_timing_ms: float,
+    avg_technique_pct: float,
+    hit_accuracy_pct: float,
+    notes: str | None = None,
+    source: str = COUNTER_STRAFE_SOURCE_USER_ENTRY,
+    evidence_path: str | None = None,
+) -> int:
+    """Doğrulanmış kullanıcı girişiyle counter-strafe oturumu kaydeder."""
+    payload = _validate_counter_strafe_session_payload(
+        nickname=nickname,
+        session_date=session_date,
+        drill_name=drill_name,
+        kills=kills,
+        avg_kill_score=avg_kill_score,
+        avg_speed=avg_speed,
+        avg_timing_ms=avg_timing_ms,
+        avg_technique_pct=avg_technique_pct,
+        hit_accuracy_pct=hit_accuracy_pct,
+        notes=notes,
+        source=source,
+        evidence_path=evidence_path,
+    )
+    created_at = _now_iso()
+    with _connect() as conn:
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO counter_strafe_sessions (
+                    nickname, session_date, drill_name, kills,
+                    avg_kill_score, avg_speed, avg_timing_ms,
+                    avg_technique_pct, hit_accuracy_pct,
+                    notes, source, evidence_path, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload["nickname"],
+                    payload["session_date"],
+                    payload["drill_name"],
+                    payload["kills"],
+                    payload["avg_kill_score"],
+                    payload["avg_speed"],
+                    payload["avg_timing_ms"],
+                    payload["avg_technique_pct"],
+                    payload["hit_accuracy_pct"],
+                    payload["notes"],
+                    payload["source"],
+                    payload["evidence_path"],
+                    created_at,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise CounterStrafeSessionError(
+                "Counter-strafe oturumu veritabanı kısıtlarına uymuyor."
+            ) from exc
+        return int(cursor.lastrowid)
+
+
+def list_counter_strafe_sessions(
+    nickname: str,
+    *,
+    limit: int = 10,
+    drill_name: str | None = None,
+) -> list[dict[str, Any]]:
+    """Nickname için son N oturumu tarih ve kayıt sırasına göre döndürür."""
+    normalized_limit = _require_positive_int(limit, "limit")
+    normalized_nickname = _require_non_empty_text(nickname, "nickname").lower()
+
+    params: list[Any] = [normalized_nickname]
+    drill_filter = ""
+    if drill_name is not None:
+        normalized_drill = _require_non_empty_text(drill_name, "drill_name")
+        drill_filter = "AND drill_name = ?"
+        params.append(normalized_drill)
+
+    params.append(normalized_limit)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM counter_strafe_sessions
+            WHERE nickname = ?
+            {drill_filter}
+            ORDER BY session_date DESC, id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def upsert_player(nickname: str, player_id: str | None) -> None:
