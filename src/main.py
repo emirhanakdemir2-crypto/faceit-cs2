@@ -48,6 +48,7 @@ from src.session_coach import (
     write_clip_review_template,
 )
 from src.storage import get_known_match_ids, get_last_analysis, init_db, persist_analysis_run
+from src.counter_strafe_cli import check_orphan_log_args, run_counter_strafe_log_cli
 
 console = Console()
 
@@ -98,6 +99,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--suite", action="store_true",
         help="Coach Analytics Suite raporu + dashboard HTML",
     )
+    parser.add_argument(
+        "--log-counter-strafe", action="store_true",
+        help="Doğrulanmış counter-strafe oturumunu kaydet (FACEIT analizi çalıştırmaz)",
+    )
+    parser.add_argument("--session-date", type=str, default=None, help="Counter-strafe oturum tarihi (YYYY-MM-DD)")
+    parser.add_argument("--drill-name", type=str, default=None, help="Counter-strafe drill/map adı")
+    parser.add_argument("--kills", type=int, default=None, help="Counter-strafe kill sayısı")
+    parser.add_argument("--avg-kill-score", type=float, default=None, help="Counter-strafe avg kill score")
+    parser.add_argument("--avg-speed", type=float, default=None, help="Counter-strafe avg speed")
+    parser.add_argument("--avg-timing-ms", type=float, default=None, help="Counter-strafe avg timing (ms)")
+    parser.add_argument("--avg-technique-pct", type=float, default=None, help="Counter-strafe avg technique %")
+    parser.add_argument("--hit-accuracy-pct", type=float, default=None, help="Counter-strafe hit accuracy %")
+    parser.add_argument("--notes", type=str, default=None, help="Counter-strafe oturum notu (opsiyonel)")
+    parser.add_argument(
+        "--evidence-path", type=str, default=None,
+        help="Screenshot kanıt dosya yolu (opsiyonel, mevcut dosya olmalı)",
+    )
     return parser.parse_args(argv)
 
 
@@ -114,6 +132,17 @@ def _print_summary_panel(**kwargs: Any) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     nickname = args.nickname.strip()
+
+    if not nickname:
+        console.print("[red]Nickname boş olamaz.[/red]")
+        return 1
+
+    orphan_exit = check_orphan_log_args(args)
+    if orphan_exit is not None:
+        return orphan_exit
+
+    if args.log_counter_strafe:
+        return run_counter_strafe_log_cli(args, nickname)
 
     if args.tara:
         if not args.demo_folder:
@@ -149,10 +178,6 @@ def main(argv: list[str] | None = None) -> int:
         api_match_count = max(recent_count, 20)
     else:
         api_match_count = match_count
-
-    if not nickname:
-        console.print("[red]Nickname boş olamaz.[/red]")
-        return 1
 
     ensure_data_dirs()
     init_db()
