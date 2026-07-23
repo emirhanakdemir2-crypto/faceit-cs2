@@ -219,6 +219,7 @@ def _empty_context(
         "target_steamid": UNAVAILABLE,
         "target_candidates": [],
         "engagement_verified": False,
+        "evidence_bucket": cfg.V2_EVIDENCE_UNRESOLVED,
         "eligibility_source": UNAVAILABLE,
         "confidence": "none",
         "unavailable_reason": unavailable_reason,
@@ -324,25 +325,43 @@ def build_shot_contexts(
             hurts, shooter_steamid=shooter, tick=tick,
         )
 
-        eligibility_source: Any = UNAVAILABLE
-        engagement = False
-        target_steamid: Any = UNAVAILABLE
-        candidates: list[dict[str, Any]] = []
-
-        if hurt_targets:
-            # Confirmed hit target(s) only — does not invent miss targets.
-            engagement = True
-            eligibility_source = cfg.V2_ELIGIBILITY_SOURCE_HURT
-            candidates = hurt_targets
-            if len(hurt_targets) == 1:
-                target_steamid = hurt_targets[0]["steamid"]
-        elif spotted_enemies:
-            engagement = True
+        has_spotted = bool(spotted_enemies)
+        has_hurt = bool(hurt_targets)
+        if has_spotted and has_hurt:
+            evidence_bucket = cfg.V2_EVIDENCE_SPOTTED_AND_HURT
             eligibility_source = cfg.V2_ELIGIBILITY_SOURCE_APPROX_SPOTTED
+            engagement = True
             candidates = spotted_enemies
-            # Single approximate enemy may be reported; still approximate, not LoS.
+            # Prefer single spotted enemy; hurt confirms engagement but does not
+            # invent miss targets and does not replace spotted evidence class.
             if len(spotted_enemies) == 1:
                 target_steamid = spotted_enemies[0]["steamid"]
+            elif len(hurt_targets) == 1:
+                target_steamid = hurt_targets[0]["steamid"]
+            else:
+                target_steamid = UNAVAILABLE
+        elif has_spotted:
+            evidence_bucket = cfg.V2_EVIDENCE_SPOTTED_ONLY
+            eligibility_source = cfg.V2_ELIGIBILITY_SOURCE_APPROX_SPOTTED
+            engagement = True
+            candidates = spotted_enemies
+            target_steamid = (
+                spotted_enemies[0]["steamid"] if len(spotted_enemies) == 1 else UNAVAILABLE
+            )
+        elif has_hurt:
+            evidence_bucket = cfg.V2_EVIDENCE_HURT_ONLY
+            eligibility_source = cfg.V2_ELIGIBILITY_SOURCE_HURT
+            engagement = True
+            candidates = hurt_targets
+            target_steamid = (
+                hurt_targets[0]["steamid"] if len(hurt_targets) == 1 else UNAVAILABLE
+            )
+        else:
+            evidence_bucket = cfg.V2_EVIDENCE_UNRESOLVED
+            eligibility_source = UNAVAILABLE
+            engagement = False
+            candidates = []
+            target_steamid = UNAVAILABLE
 
         unavailable_reason = ""
         if max_speed is None:
@@ -372,6 +391,7 @@ def build_shot_contexts(
             "target_steamid": target_steamid,
             "target_candidates": candidates,
             "engagement_verified": engagement,
+            "evidence_bucket": evidence_bucket,
             "eligibility_source": eligibility_source,
             "confidence": "medium" if engagement else "none",
             "unavailable_reason": unavailable_reason or UNAVAILABLE,

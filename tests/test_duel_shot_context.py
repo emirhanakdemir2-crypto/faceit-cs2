@@ -113,6 +113,7 @@ class DuelShotContextTests(unittest.TestCase):
         self.assertFalse(ctxs[0]["engagement_verified"])
         self.assertEqual(ctxs[0]["target_steamid"], dsc.UNAVAILABLE)
         self.assertEqual(ctxs[0]["eligibility_source"], dsc.UNAVAILABLE)
+        self.assertEqual(ctxs[0]["evidence_bucket"], cfg.V2_EVIDENCE_UNRESOLVED)
 
     def test_hurt_confirms_target_only_near_shot_tick(self) -> None:
         ticks = [
@@ -139,6 +140,33 @@ class DuelShotContextTests(unittest.TestCase):
             ctxs[0]["eligibility_source"],
             cfg.V2_ELIGIBILITY_SOURCE_HURT,
         )
+        self.assertEqual(ctxs[0]["evidence_bucket"], cfg.V2_EVIDENCE_HURT_ONLY)
+
+    def test_spotted_and_hurt_is_single_bucket(self) -> None:
+        ticks = [
+            self._tick(tick=50, steamid="111", team=2, spotted_by=["222"]),
+            self._tick(tick=50, steamid="222", team=3, spotted_by=["111"]),
+        ]
+        shots = [{"tick": 50, "weapon": "ak47"}]
+        hurts = [{
+            "tick": 50,
+            "attacker_steamid": "111",
+            "user_steamid": "222",
+            "user_name": "Enemy",
+        }]
+        ctxs = dsc.build_shot_contexts(
+            demo_id="demoA",
+            shooter_steamid="111",
+            shot_rows=shots,
+            tick_rows=ticks,
+            hurt_rows=hurts,
+        )
+        self.assertEqual(ctxs[0]["evidence_bucket"], cfg.V2_EVIDENCE_SPOTTED_AND_HURT)
+        self.assertEqual(
+            ctxs[0]["eligibility_source"],
+            cfg.V2_ELIGIBILITY_SOURCE_APPROX_SPOTTED,
+        )
+        self.assertTrue(ctxs[0]["engagement_verified"])
 
     def test_max_speed_missing_not_fabricated(self) -> None:
         ticks = [

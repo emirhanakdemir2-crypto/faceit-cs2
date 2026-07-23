@@ -589,31 +589,39 @@ def _compute_v2_for_demo(
 
 
 def combine_proper_counter_strafe_v2(demo_v2_list: list[dict[str, Any]]) -> dict[str, Any]:
-    """Combine per-demo V2 results by summing eligible shot counts (no fabricated %)."""
+    """Combine per-demo V2 results; headline stays spotted-only (+ spotted_and_hurt)."""
     import statistics as _stats
 
     from src import suite_config as cfg
     from src.proper_counter_strafe_v2 import (
+        DIAGNOSTIC_BUCKETS,
+        _coverage_pct,
         _empty_v2,
         _pct,
-        confidence_for_sample_size,
+        sample_confidence_for_size,
     )
 
+    all_demos = [m for m in demo_v2_list if isinstance(m, dict) and m]
     usable = [
-        m for m in demo_v2_list
-        if m and isinstance(m.get("eligible_shots"), int) and m.get("eligible_shots", 0) > 0
+        m for m in all_demos
+        if isinstance(m.get("eligible_shots"), int) and int(m.get("eligible_shots") or 0) > 0
     ]
     if not usable:
-        reason = "no eligible V2 rifle shots across demos"
-        for m in demo_v2_list:
-            if m and m.get("unavailable_reason") not in (None, "", "Unavailable"):
+        reason = "no spotted-eligible V2 rifle shots across demos"
+        for m in all_demos:
+            if m.get("unavailable_reason") not in (None, "", "Unavailable"):
                 reason = str(m.get("unavailable_reason"))
                 break
-        return _empty_v2(reason=reason)
+        out = _empty_v2(reason=reason)
+        out["demo_count_with_v2"] = 0
+        return out
 
-    eligible = sum(int(m["eligible_shots"]) for m in usable)
-    proper = sum(int(m.get("proper_shots") or 0) for m in usable)
-    first_el = sum(int(m.get("first_bullet_eligible_shots") or 0) for m in usable)
+    def _sum_int(key: str) -> int:
+        return sum(int(m.get(key) or 0) for m in usable)
+
+    eligible = _sum_int("eligible_shots")
+    proper = _sum_int("proper_shots")
+    first_el = _sum_int("first_bullet_eligible_shots")
     first_pr = 0
     for m in usable:
         fe = int(m.get("first_bullet_eligible_shots") or 0)
@@ -621,19 +629,33 @@ def combine_proper_counter_strafe_v2(demo_v2_list: list[dict[str, Any]]) -> dict
         if fe > 0 and isinstance(fpct, (int, float)):
             first_pr += int(round(fe * float(fpct) / 100.0))
 
-    sources: set[str] = set()
-    experimental_any = False
-    for m in usable:
-        src = m.get("eligibility_source")
-        if isinstance(src, str) and src not in ("Unavailable", ""):
-            for part in src.split(","):
-                if part.strip():
-                    sources.add(part.strip())
-        if m.get("experimental") or m.get("status") == cfg.V2_STATUS_EXPERIMENTAL:
-            experimental_any = True
+    base_cand = sum(int(m.get("base_rifle_non_crouch_candidates") or 0) for m in all_demos)
+    fb_base = sum(int(m.get("first_bullet_base_candidates") or 0) for m in all_demos)
 
-    only_approx = sources == {cfg.V2_ELIGIBILITY_SOURCE_APPROX_SPOTTED}
-    status = cfg.V2_STATUS_EXPERIMENTAL if (experimental_any or only_approx) else "ok"
+    source_counts: dict[str, dict[str, Any]] = {}
+    for bucket in DIAGNOSTIC_BUCKETS:
+        n = proper_n = improper_n = fb_el = fb_pr = 0
+        for m in all_demos:
+            sc = (m.get("source_counts") or {}).get(bucket) or {}
+            bn = int(sc.get("n") or 0)
+            n += bn
+            proper_n += int(sc.get("proper_shots") or 0)
+            improper_n += int(sc.get("improper_shots") or 0)
+            fe = int(sc.get("first_bullet_eligible_shots") or 0)
+            fb_el += fe
+            fpct = sc.get("first_bullet_proper_pct")
+            if fe > 0 and isinstance(fpct, (int, float)):
+                fb_pr += int(round(fe * float(fpct) / 100.0))
+        source_counts[bucket] = {
+            "n": n,
+            "proper_shots": proper_n,
+            "improper_shots": improper_n,
+            "proper_counter_strafe_pct": _pct(proper_n, n),
+            "first_bullet_eligible_shots": fb_el,
+            "first_bullet_proper_pct": _pct(fb_pr, fb_el),
+            "median_speed_ratio": "Unavailable",
+            "p75_speed_ratio": "Unavailable",
+        }
 
     medians = [
         float(m["median_speed_ratio"])
@@ -646,35 +668,40 @@ def combine_proper_counter_strafe_v2(demo_v2_list: list[dict[str, Any]]) -> dict
         if isinstance(m.get("p75_speed_ratio"), (int, float))
     ]
 
-    by_ak_el = by_ak_pr = by_m4_el = by_m4_pr = 0
-    by_ak_fb_el = by_ak_fb_pr = by_m4_fb_el = by_m4_fb_pr = 0
-    for m in usable:
-        ak = (m.get("by_weapon") or {}).get("ak") or {}
-        m4 = (m.get("by_weapon") or {}).get("m4") or {}
-        by_ak_el += int(ak.get("eligible_shots") or 0)
-        by_m4_el += int(m4.get("eligible_shots") or 0)
-        by_ak_pr += int(ak.get("proper_shots") or 0)
-        by_m4_pr += int(m4.get("proper_shots") or 0)
-        ak_fe = int(ak.get("first_bullet_eligible_shots") or 0)
-        m4_fe = int(m4.get("first_bullet_eligible_shots") or 0)
-        by_ak_fb_el += ak_fe
-        by_m4_fb_el += m4_fe
-        ak_fpct = ak.get("first_bullet_proper_pct")
-        m4_fpct = m4.get("first_bullet_proper_pct")
-        if ak_fe > 0 and isinstance(ak_fpct, (int, float)):
-            by_ak_fb_pr += int(round(ak_fe * float(ak_fpct) / 100.0))
-        if m4_fe > 0 and isinstance(m4_fpct, (int, float)):
-            by_m4_fb_pr += int(round(m4_fe * float(m4_fpct) / 100.0))
+    def _weapon_combine(key: str) -> dict[str, Any]:
+        el = pr = fe = fpr = 0
+        for m in usable:
+            w = (m.get("by_weapon") or {}).get(key) or {}
+            el += int(w.get("eligible_shots") or 0)
+            pr += int(w.get("proper_shots") or 0)
+            wfe = int(w.get("first_bullet_eligible_shots") or 0)
+            fe += wfe
+            fpct = w.get("first_bullet_proper_pct")
+            if wfe > 0 and isinstance(fpct, (int, float)):
+                fpr += int(round(wfe * float(fpct) / 100.0))
+        return {
+            "eligible_shots": el,
+            "proper_shots": pr,
+            "proper_counter_strafe_pct": _pct(pr, el),
+            "first_bullet_eligible_shots": fe,
+            "first_bullet_proper_pct": _pct(fpr, fe),
+            "sample_size": el,
+            "sample_confidence": sample_confidence_for_size(el),
+            "confidence": sample_confidence_for_size(el),
+            "status": cfg.V2_STATUS_EXPERIMENTAL if el else cfg.V2_STATUS_UNAVAILABLE,
+            "experimental": True,
+            "measurement_quality": cfg.V2_MEASUREMENT_QUALITY_EXPERIMENTAL,
+            "unavailable_reason": "Unavailable" if el else f"no spotted-eligible {key.upper()} V2 shots",
+            "eligibility_source": cfg.V2_ELIGIBILITY_SOURCE_APPROX_SPOTTED,
+            "display_title": cfg.V2_DISPLAY_TITLE,
+            "coach_soft_label": cfg.V2_COACH_SOFT_LABEL,
+        }
 
-    src_label = (
-        cfg.V2_ELIGIBILITY_SOURCE_APPROX_SPOTTED
-        if only_approx
-        else (",".join(sorted(sources)) if sources else "Unavailable")
-    )
     return {
         "metric_label": cfg.V2_METRIC_LABEL,
+        "display_title": cfg.V2_DISPLAY_TITLE,
         "legacy_metric_label": cfg.V2_LEGACY_METRIC_LABEL,
-        "status": status,
+        "status": cfg.V2_STATUS_EXPERIMENTAL,
         "eligible_shots": eligible,
         "proper_shots": proper,
         "improper_shots": eligible - proper,
@@ -686,38 +713,24 @@ def combine_proper_counter_strafe_v2(demo_v2_list: list[dict[str, Any]]) -> dict
         ),
         "p75_speed_ratio": round(_stats.median(p75s), 4) if p75s else "Unavailable",
         "sample_size": eligible,
-        "confidence": confidence_for_sample_size(eligible),
-        "eligibility_source": src_label,
+        "sample_confidence": sample_confidence_for_size(eligible),
+        "confidence": sample_confidence_for_size(eligible),
+        "measurement_quality": cfg.V2_MEASUREMENT_QUALITY_EXPERIMENTAL,
+        "eligibility_source": cfg.V2_ELIGIBILITY_SOURCE_APPROX_SPOTTED,
         "unavailable_reason": "Unavailable",
-        "experimental": status == cfg.V2_STATUS_EXPERIMENTAL,
+        "experimental": True,
+        "coach_soft_label": cfg.V2_COACH_SOFT_LABEL,
+        "base_rifle_non_crouch_candidates": base_cand,
+        "spotted_eligible_shots": eligible,
+        "eligibility_coverage_pct": _coverage_pct(eligible, base_cand),
+        "first_bullet_base_candidates": fb_base,
+        "first_bullet_spotted_eligible_shots": first_el,
+        "first_bullet_eligibility_coverage_pct": _coverage_pct(first_el, fb_base),
+        "source_counts": source_counts,
         "demo_count_with_v2": len(usable),
         "by_weapon": {
-            "ak": {
-                "eligible_shots": by_ak_el,
-                "proper_shots": by_ak_pr,
-                "proper_counter_strafe_pct": _pct(by_ak_pr, by_ak_el),
-                "first_bullet_eligible_shots": by_ak_fb_el,
-                "first_bullet_proper_pct": _pct(by_ak_fb_pr, by_ak_fb_el),
-                "sample_size": by_ak_el,
-                "confidence": confidence_for_sample_size(by_ak_el),
-                "status": status if by_ak_el else "Unavailable",
-                "experimental": status == cfg.V2_STATUS_EXPERIMENTAL,
-                "unavailable_reason": "Unavailable" if by_ak_el else "no eligible AK V2 shots",
-                "eligibility_source": src_label,
-            },
-            "m4": {
-                "eligible_shots": by_m4_el,
-                "proper_shots": by_m4_pr,
-                "proper_counter_strafe_pct": _pct(by_m4_pr, by_m4_el),
-                "first_bullet_eligible_shots": by_m4_fb_el,
-                "first_bullet_proper_pct": _pct(by_m4_fb_pr, by_m4_fb_el),
-                "sample_size": by_m4_el,
-                "confidence": confidence_for_sample_size(by_m4_el),
-                "status": status if by_m4_el else "Unavailable",
-                "experimental": status == cfg.V2_STATUS_EXPERIMENTAL,
-                "unavailable_reason": "Unavailable" if by_m4_el else "no eligible M4 V2 shots",
-                "eligibility_source": src_label,
-            },
+            "ak": _weapon_combine("ak"),
+            "m4": _weapon_combine("m4"),
         },
     }
 

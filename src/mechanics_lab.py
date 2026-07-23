@@ -179,37 +179,45 @@ def render_mechanics_lab_markdown(lab: dict[str, Any]) -> list[str]:
         lines.append("_Rifle velocity verisi yetersiz; counter-strafe teşhisi yapılmadı._")
         lines.append("")
 
-    # --- Proper Counter-Strafe V2 (separate from legacy) ---
+    # --- Proper Counter-Strafe V2 (Experimental — approximate spotted data) ---
     v2 = mech.get("proper_counter_strafe_v2") or {}
+    sc = v2.get("source_counts") or {}
     lines.extend([
-        "### Proper Counter-Strafe V2",
+        f"### {_fmt(v2.get('display_title') or 'Proper Counter-Strafe V2 (Experimental — approximate spotted data)')}",
         "",
         f"- metric_label: `{_fmt(v2.get('metric_label') or 'proper_counter_strafe_v2')}`",
         f"- legacy_metric_label: `{_fmt(v2.get('legacy_metric_label') or mech.get('legacy_metric_label') or 'legacy_first_bullet_moving')}`",
         f"- status: {_fmt(v2.get('status'))}",
-        f"- experimental: {_fmt(v2.get('experimental'))}",
-        f"- eligible_shots / sample_size: {_fmt(v2.get('eligible_shots'))} / {_fmt(v2.get('sample_size'))}",
-        f"- proper_shots / improper_shots: {_fmt(v2.get('proper_shots'))} / {_fmt(v2.get('improper_shots'))}",
-        f"- proper_counter_strafe_pct: {_fmt(v2.get('proper_counter_strafe_pct'))}",
-        f"- first_bullet_eligible_shots: {_fmt(v2.get('first_bullet_eligible_shots'))}",
-        f"- first_bullet_proper_pct: {_fmt(v2.get('first_bullet_proper_pct'))}",
-        f"- median_speed_ratio: {_fmt(v2.get('median_speed_ratio'))}",
-        f"- p75_speed_ratio: {_fmt(v2.get('p75_speed_ratio'))}",
-        f"- confidence: {_fmt(v2.get('confidence'))}",
+        f"- measurement_quality: {_fmt(v2.get('measurement_quality'))}",
+        f"- sample_confidence: {_fmt(v2.get('sample_confidence') or v2.get('confidence'))}",
         f"- eligibility_source: {_fmt(v2.get('eligibility_source'))}",
+        f"- coach_note: {_fmt(v2.get('coach_soft_label'))} (kesin hata oranı değil)",
+        f"- base non-crouched rifle candidates: {_fmt(v2.get('base_rifle_non_crouch_candidates'))}",
+        f"- spotted-eligible (headline): {_fmt(v2.get('spotted_eligible_shots') or v2.get('eligible_shots'))}",
+        f"- eligibility coverage %: {_fmt(v2.get('eligibility_coverage_pct'))}",
+        f"- first-bullet coverage %: {_fmt(v2.get('first_bullet_eligibility_coverage_pct'))}",
+        f"- headline proper_counter_strafe_pct: {_fmt(v2.get('proper_counter_strafe_pct'))}",
+        f"- headline first_bullet_proper_pct: {_fmt(v2.get('first_bullet_proper_pct'))}",
+        f"- median_speed_ratio / p75: {_fmt(v2.get('median_speed_ratio'))} / {_fmt(v2.get('p75_speed_ratio'))}",
         f"- unavailable_reason: {_fmt(v2.get('unavailable_reason'))}",
+        "",
+        "**Evidence source counts (diagnostic):**",
+        f"* spotted_only: n={_fmt((sc.get('spotted_only') or {}).get('n'))} proper%={_fmt((sc.get('spotted_only') or {}).get('proper_counter_strafe_pct'))}",
+        f"* spotted_and_hurt: n={_fmt((sc.get('spotted_and_hurt') or {}).get('n'))} proper%={_fmt((sc.get('spotted_and_hurt') or {}).get('proper_counter_strafe_pct'))}",
+        f"* hurt_only (excluded from headline): n={_fmt((sc.get('hurt_only') or {}).get('n'))} proper%={_fmt((sc.get('hurt_only') or {}).get('proper_counter_strafe_pct'))}",
+        f"* unresolved: n={_fmt((sc.get('unresolved') or {}).get('n'))}",
         "",
     ])
     ak_v2 = (v2.get("by_weapon") or {}).get("ak") or {}
     m4_v2 = (v2.get("by_weapon") or {}).get("m4") or {}
     lines.extend([
-        "**V2 AK:**",
-        f"* eligible: {_fmt(ak_v2.get('eligible_shots'))} | proper%: {_fmt(ak_v2.get('proper_counter_strafe_pct'))} | first_bullet_proper%: {_fmt(ak_v2.get('first_bullet_proper_pct'))} | conf: {_fmt(ak_v2.get('confidence'))}",
+        "**V2 AK (headline spotted pool):**",
+        f"* eligible: {_fmt(ak_v2.get('eligible_shots'))} | proper%: {_fmt(ak_v2.get('proper_counter_strafe_pct'))} | first_bullet_proper%: {_fmt(ak_v2.get('first_bullet_proper_pct'))} | sample_conf: {_fmt(ak_v2.get('sample_confidence') or ak_v2.get('confidence'))}",
         "",
-        "**V2 M4:**",
-        f"* eligible: {_fmt(m4_v2.get('eligible_shots'))} | proper%: {_fmt(m4_v2.get('proper_counter_strafe_pct'))} | first_bullet_proper%: {_fmt(m4_v2.get('first_bullet_proper_pct'))} | conf: {_fmt(m4_v2.get('confidence'))}",
+        "**V2 M4 (headline spotted pool):**",
+        f"* eligible: {_fmt(m4_v2.get('eligible_shots'))} | proper%: {_fmt(m4_v2.get('proper_counter_strafe_pct'))} | first_bullet_proper%: {_fmt(m4_v2.get('first_bullet_proper_pct'))} | sample_conf: {_fmt(m4_v2.get('sample_confidence') or m4_v2.get('confidence'))}",
         "",
-        "_V2, legacy `rifle_first_bullet_moving_pct` ile karıştırılmamalı. Spotted mask kaynağı LoS değildir._",
+        "_Headline V2 yalnızca spotted_only + spotted_and_hurt kullanır. hurt_only selection bias nedeniyle hariç. approximate_spotted_mask LoS değildir; measurement_quality=experimental._",
         "",
     ])
 
