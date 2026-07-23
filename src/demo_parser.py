@@ -520,6 +520,208 @@ def extract_player_ticks_if_available(
     return result
 
 
+def extract_duel_tick_rows(parser: Any) -> dict[str, Any]:
+    """All-player tick rows required for duel/spotted resolution (no player filter)."""
+    result: dict[str, Any] = {
+        "available": False,
+        "rows": [],
+        "columns": [],
+        "reason": "",
+    }
+    fields = [
+        "X", "Y", "Z", "pitch", "yaw", "velocity", "max_speed",
+        "ducked", "ducking", "team_num", "entity_id",
+        "approximate_spotted_by", "spotted", "total_rounds_played",
+        "active_weapon_name", "shots_fired",
+    ]
+    try:
+        df = parser.parse_ticks(fields)
+        rows = _df_records(df)
+        result["columns"] = list(df.columns) if hasattr(df, "columns") else []
+        result["rows"] = rows
+        result["available"] = len(rows) > 0
+        if not result["available"]:
+            result["reason"] = "Duel tick verisi boş."
+    except Exception as exc:
+        result["reason"] = f"Duel tick verisi alınamadı: {exc}"
+    return result
+
+
+def extract_player_hurt_rows(parser: Any, events: list[str] | None = None) -> list[dict[str, Any]]:
+    try:
+        event_list = events
+        if event_list is None:
+            event_list = parser.list_game_events()
+        if "player_hurt" not in (event_list or []):
+            return []
+        df = parser.parse_event("player_hurt")
+        return _df_records(df)
+    except Exception:
+        return []
+
+
+def _compute_v2_for_demo(
+    *,
+    demo_id: str,
+    matched_steamid: int | None,
+    shot_rows: list[dict[str, Any]],
+    duel_tick_rows: list[dict[str, Any]],
+    hurt_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    from src.duel_shot_context import build_shot_contexts
+    from src.proper_counter_strafe_v2 import _empty_v2, compute_v2_weapon_breakdown
+
+    if matched_steamid is None:
+        return _empty_v2(reason="matched steamid unavailable")
+    contexts = build_shot_contexts(
+        demo_id=demo_id,
+        shooter_steamid=str(matched_steamid),
+        shot_rows=shot_rows,
+        tick_rows=duel_tick_rows,
+        hurt_rows=hurt_rows,
+    )
+    v2 = compute_v2_weapon_breakdown(contexts)
+    v2["context_count"] = len(contexts)
+    v2["engagement_context_count"] = sum(
+        1 for c in contexts if c.get("engagement_verified")
+    )
+    return v2
+
+
+def combine_proper_counter_strafe_v2(demo_v2_list: list[dict[str, Any]]) -> dict[str, Any]:
+    """Combine per-demo V2 results by summing eligible shot counts (no fabricated %)."""
+    import statistics as _stats
+
+    from src import suite_config as cfg
+    from src.proper_counter_strafe_v2 import (
+        _empty_v2,
+        _pct,
+        confidence_for_sample_size,
+    )
+
+    usable = [
+        m for m in demo_v2_list
+        if m and isinstance(m.get("eligible_shots"), int) and m.get("eligible_shots", 0) > 0
+    ]
+    if not usable:
+        reason = "no eligible V2 rifle shots across demos"
+        for m in demo_v2_list:
+            if m and m.get("unavailable_reason") not in (None, "", "Unavailable"):
+                reason = str(m.get("unavailable_reason"))
+                break
+        return _empty_v2(reason=reason)
+
+    eligible = sum(int(m["eligible_shots"]) for m in usable)
+    proper = sum(int(m.get("proper_shots") or 0) for m in usable)
+    first_el = sum(int(m.get("first_bullet_eligible_shots") or 0) for m in usable)
+    first_pr = 0
+    for m in usable:
+        fe = int(m.get("first_bullet_eligible_shots") or 0)
+        fpct = m.get("first_bullet_proper_pct")
+        if fe > 0 and isinstance(fpct, (int, float)):
+            first_pr += int(round(fe * float(fpct) / 100.0))
+
+    sources: set[str] = set()
+    experimental_any = False
+    for m in usable:
+        src = m.get("eligibility_source")
+        if isinstance(src, str) and src not in ("Unavailable", ""):
+            for part in src.split(","):
+                if part.strip():
+                    sources.add(part.strip())
+        if m.get("experimental") or m.get("status") == cfg.V2_STATUS_EXPERIMENTAL:
+            experimental_any = True
+
+    only_approx = sources == {cfg.V2_ELIGIBILITY_SOURCE_APPROX_SPOTTED}
+    status = cfg.V2_STATUS_EXPERIMENTAL if (experimental_any or only_approx) else "ok"
+
+    medians = [
+        float(m["median_speed_ratio"])
+        for m in usable
+        if isinstance(m.get("median_speed_ratio"), (int, float))
+    ]
+    p75s = [
+        float(m["p75_speed_ratio"])
+        for m in usable
+        if isinstance(m.get("p75_speed_ratio"), (int, float))
+    ]
+
+    by_ak_el = by_ak_pr = by_m4_el = by_m4_pr = 0
+    by_ak_fb_el = by_ak_fb_pr = by_m4_fb_el = by_m4_fb_pr = 0
+    for m in usable:
+        ak = (m.get("by_weapon") or {}).get("ak") or {}
+        m4 = (m.get("by_weapon") or {}).get("m4") or {}
+        by_ak_el += int(ak.get("eligible_shots") or 0)
+        by_m4_el += int(m4.get("eligible_shots") or 0)
+        by_ak_pr += int(ak.get("proper_shots") or 0)
+        by_m4_pr += int(m4.get("proper_shots") or 0)
+        ak_fe = int(ak.get("first_bullet_eligible_shots") or 0)
+        m4_fe = int(m4.get("first_bullet_eligible_shots") or 0)
+        by_ak_fb_el += ak_fe
+        by_m4_fb_el += m4_fe
+        ak_fpct = ak.get("first_bullet_proper_pct")
+        m4_fpct = m4.get("first_bullet_proper_pct")
+        if ak_fe > 0 and isinstance(ak_fpct, (int, float)):
+            by_ak_fb_pr += int(round(ak_fe * float(ak_fpct) / 100.0))
+        if m4_fe > 0 and isinstance(m4_fpct, (int, float)):
+            by_m4_fb_pr += int(round(m4_fe * float(m4_fpct) / 100.0))
+
+    src_label = (
+        cfg.V2_ELIGIBILITY_SOURCE_APPROX_SPOTTED
+        if only_approx
+        else (",".join(sorted(sources)) if sources else "Unavailable")
+    )
+    return {
+        "metric_label": cfg.V2_METRIC_LABEL,
+        "legacy_metric_label": cfg.V2_LEGACY_METRIC_LABEL,
+        "status": status,
+        "eligible_shots": eligible,
+        "proper_shots": proper,
+        "improper_shots": eligible - proper,
+        "proper_counter_strafe_pct": _pct(proper, eligible),
+        "first_bullet_eligible_shots": first_el,
+        "first_bullet_proper_pct": _pct(first_pr, first_el),
+        "median_speed_ratio": (
+            round(_stats.median(medians), 4) if medians else "Unavailable"
+        ),
+        "p75_speed_ratio": round(_stats.median(p75s), 4) if p75s else "Unavailable",
+        "sample_size": eligible,
+        "confidence": confidence_for_sample_size(eligible),
+        "eligibility_source": src_label,
+        "unavailable_reason": "Unavailable",
+        "experimental": status == cfg.V2_STATUS_EXPERIMENTAL,
+        "demo_count_with_v2": len(usable),
+        "by_weapon": {
+            "ak": {
+                "eligible_shots": by_ak_el,
+                "proper_shots": by_ak_pr,
+                "proper_counter_strafe_pct": _pct(by_ak_pr, by_ak_el),
+                "first_bullet_eligible_shots": by_ak_fb_el,
+                "first_bullet_proper_pct": _pct(by_ak_fb_pr, by_ak_fb_el),
+                "sample_size": by_ak_el,
+                "confidence": confidence_for_sample_size(by_ak_el),
+                "status": status if by_ak_el else "Unavailable",
+                "experimental": status == cfg.V2_STATUS_EXPERIMENTAL,
+                "unavailable_reason": "Unavailable" if by_ak_el else "no eligible AK V2 shots",
+                "eligibility_source": src_label,
+            },
+            "m4": {
+                "eligible_shots": by_m4_el,
+                "proper_shots": by_m4_pr,
+                "proper_counter_strafe_pct": _pct(by_m4_pr, by_m4_el),
+                "first_bullet_eligible_shots": by_m4_fb_el,
+                "first_bullet_proper_pct": _pct(by_m4_fb_pr, by_m4_fb_el),
+                "sample_size": by_m4_el,
+                "confidence": confidence_for_sample_size(by_m4_el),
+                "status": status if by_m4_el else "Unavailable",
+                "experimental": status == cfg.V2_STATUS_EXPERIMENTAL,
+                "unavailable_reason": "Unavailable" if by_m4_el else "no eligible M4 V2 shots",
+                "eligibility_source": src_label,
+            },
+        },
+    }
+
+
 def _speed_from_row(row: dict[str, Any]) -> float | None:
     for key in ("user_velocity", "velocity_scalar", "velocity", "speed", "velocity_length"):
         val = row.get(key)
@@ -1321,6 +1523,18 @@ def parse_demo_basic(
                 tick_rows=ticks.get("rows") or [],
             )
 
+        duel_ticks = extract_duel_tick_rows(parser)
+        hurt_rows = extract_player_hurt_rows(parser, events)
+        proper_cs_v2 = _compute_v2_for_demo(
+            demo_id=path.name,
+            matched_steamid=matched_steamid,
+            shot_rows=shots.get("rows") or [],
+            duel_tick_rows=duel_ticks.get("rows") or [],
+            hurt_rows=hurt_rows,
+        )
+        mechanics["proper_counter_strafe_v2"] = proper_cs_v2
+        mechanics["legacy_metric_label"] = "legacy_first_bullet_moving"
+
         confidence = mechanics.get("rifle_metrics_confidence", mechanics.get("metrics_confidence", "none"))
         if matched and kd["kills"] + kd["deaths"] > 0 and confidence == "none":
             confidence = "low"
@@ -1369,6 +1583,7 @@ def parse_demo_basic(
             "shots_with_velocity": mechanics.get("shots_with_velocity", 0),
             "mechanics": mechanics,
             "impact": impact,
+            "proper_counter_strafe_v2": proper_cs_v2,
             "events_found": events[:15],
         }
         if debug:
@@ -1635,7 +1850,25 @@ def build_mechanics_summary(
             "note": (
                 f"{len(reliable_mech)} demo combined — ana yorum rifle/pistol/SMG ayrı metriklerle üretildi."
             ),
+            "proper_counter_strafe_v2": combine_proper_counter_strafe_v2(
+                [
+                    (d.get("proper_counter_strafe_v2") or d.get("mechanics", {}).get("proper_counter_strafe_v2") or {})
+                    for d in ok_demos
+                ]
+            ),
+            "legacy_metric_label": "legacy_first_bullet_moving",
         }
+
+    # Always attach V2 (even when legacy velocity metrics are unreliable).
+    v2_combined = combine_proper_counter_strafe_v2(
+        [
+            (d.get("proper_counter_strafe_v2") or d.get("mechanics", {}).get("proper_counter_strafe_v2") or {})
+            for d in ok_demos
+        ]
+    )
+    aggregated["mechanics"]["proper_counter_strafe_v2"] = v2_combined
+    aggregated["mechanics"]["legacy_metric_label"] = "legacy_first_bullet_moving"
+    aggregated["proper_counter_strafe_v2"] = v2_combined
 
     aggregated["per_demo_cards"] = per_demo_cards
 
