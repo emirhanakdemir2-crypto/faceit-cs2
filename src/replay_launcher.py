@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 import webbrowser
+from dataclasses import dataclass
 from pathlib import Path
 
 from rich.console import Console
@@ -25,6 +26,11 @@ PORT_RANGE_END = 3099
 
 REPLAY_MODE_FLAG = "replay_demo"
 REPLAY_SMALLEST_FLAG = "replay_demo_smallest"
+
+DEFAULT_SELECTION_REASON = (
+    "data/demos içinde oynatılabilir .dem boyutuna göre en küçük geçerli demo "
+    "(boş/bozuk dosyalar atlandı, başlık doğrulaması geçti)"
+)
 
 CONFLICTING_ANALYSIS_FLAGS: tuple[tuple[str, str], ...] = (
     ("matches", "--matches"),
@@ -69,6 +75,11 @@ def is_dem_header_valid(path: Path) -> bool:
     return magic.startswith(b"PBDEMS2") or magic.startswith(b"HL2DEMO")
 
 
+def _is_compressed_source(path: Path) -> bool:
+    name_lower = path.name.lower()
+    return any(name_lower.endswith(ext) for ext in COMPRESSED_EXTENSIONS)
+
+
 def _is_demo_candidate(path: Path) -> bool:
     name_lower = path.name.lower()
     return any(name_lower.endswith(ext) for ext in DEMO_EXTENSIONS)
@@ -82,7 +93,69 @@ def iter_demo_candidates(demos_dir: Path) -> list[Path]:
         for path in demos_dir.iterdir()
         if path.is_file() and _is_demo_candidate(path)
     ]
-    return sorted(files, key=lambda path: path.stat().st_size)
+    return sorted(files, key=lambda path: path.name.lower())
+
+
+@dataclass(frozen=True)
+class ValidDemoCandidate:
+    source_path: Path
+    playable_path: Path
+    source_size: int
+    playable_size: int
+
+
+def evaluate_demo_candidate(source: Path) -> tuple[ValidDemoCandidate | None, str]:
+    try:
+        source_size = source.stat().st_size
+    except OSError as exc:
+        return None, f"{source.name}: okunamadı ({exc})"
+
+    if source_size <= 0:
+        return None, f"{source.name} ({source_size} B): boş dosya"
+
+    resolved, err = resolve_demo_path(str(source))
+    if resolved is None:
+        return None, f"{source.name} ({source_size} B): {err}"
+
+    try:
+        playable_size = resolved.stat().st_size
+    except OSError as exc:
+        return None, f"{source.name}: oynatılabilir demo okunamadı ({exc})"
+
+    if playable_size <= 0:
+        return None, f"{resolved.name}: çıkarılmış demo boş"
+
+    if not is_dem_header_valid(resolved):
+        return None, f"{resolved.name}: geçersiz demo başlığı"
+
+    return (
+        ValidDemoCandidate(
+            source_path=source,
+            playable_path=resolved,
+            source_size=source_size,
+            playable_size=playable_size,
+        ),
+        "",
+    )
+
+
+def _prefer_candidate(
+    existing: ValidDemoCandidate,
+    candidate: ValidDemoCandidate,
+) -> ValidDemoCandidate:
+    existing_compressed = _is_compressed_source(existing.source_path)
+    candidate_compressed = _is_compressed_source(candidate.source_path)
+    if existing_compressed and not candidate_compressed:
+        return candidate
+    if candidate_compressed and not existing_compressed:
+        return existing
+    if candidate.playable_size < existing.playable_size:
+        return candidate
+    if candidate.playable_size > existing.playable_size:
+        return existing
+    if candidate.source_size < existing.source_size:
+        return candidate
+    return existing
 
 
 def select_smallest_valid_demo(
@@ -93,50 +166,59 @@ def select_smallest_valid_demo(
         return None, f"Demo klasörü bulunamadı: {folder}", None
 
     failures: list[str] = []
-    for candidate in iter_demo_candidates(folder):
-        source_size = candidate.stat().st_size
-        if source_size <= 0:
-            failures.append(f"{candidate.name} ({source_size} B): boş dosya")
+    by_playable: dict[Path, ValidDemoCandidate] = {}
+
+    for candidate_path in iter_demo_candidates(folder):
+        candidate, err = evaluate_demo_candidate(candidate_path)
+        if candidate is None:
+            failures.append(err)
             continue
 
-        resolved, err = resolve_demo_path(str(candidate))
-        if resolved is None:
-            failures.append(f"{candidate.name} ({source_size} B): {err}")
+        playable_key = candidate.playable_path.resolve()
+        existing = by_playable.get(playable_key)
+        if existing is None:
+            by_playable[playable_key] = candidate
             continue
+        by_playable[playable_key] = _prefer_candidate(existing, candidate)
 
-        if resolved.stat().st_size <= 0:
-            failures.append(f"{resolved.name}: çıkarılmış demo boş")
-            continue
+    if not by_playable:
+        if failures:
+            return None, "Geçerli demo bulunamadı:\n" + "\n".join(failures), None
+        return None, f"Demo klasöründe dosya yok: {folder}", None
 
-        if not is_dem_header_valid(resolved):
-            failures.append(f"{resolved.name}: geçersiz demo başlığı")
-            continue
-
-        return resolved, "", candidate
-
-    if failures:
-        return None, "Geçerli demo bulunamadı:\n" + "\n".join(failures), None
-    return None, f"Demo klasöründe dosya yok: {folder}", None
+    best = min(by_playable.values(), key=lambda item: (item.playable_size, item.source_path.name.lower()))
+    return best.playable_path, "", best.source_path
 
 
 def format_demo_selection(
     path: Path,
     *,
     source_path: Path | None = None,
-    reason: str = (
-        "data/demos içinde kaynak dosya boyutuna göre en küçük geçerli demo "
-        "(boş/bozuk dosyalar atlandı, başlık doğrulaması geçti)"
-    ),
+    reason: str = DEFAULT_SELECTION_REASON,
 ) -> str:
-    size_bytes = path.stat().st_size
-    size_mb = size_bytes / (1024 * 1024)
+    playable_bytes = path.stat().st_size
+    playable_mb = playable_bytes / (1024 * 1024)
     source = source_path or path
     source_bytes = source.stat().st_size
-    return (
-        f"Seçilen demo: {path.name} "
-        f"({size_bytes} bytes / {size_mb:.2f} MB, kaynak: {source.name}, "
-        f"{source_bytes} bytes). Neden: {reason}."
-    )
+    source_mb = source_bytes / (1024 * 1024)
+    same_file = source.resolve() == path.resolve()
+
+    lines = [
+        f"Seçilen demo: {path.name}",
+        f"  Tam yol: {path}",
+        f"  Oynatılabilir boyut: {playable_bytes} bytes / {playable_mb:.2f} MB",
+    ]
+    if same_file:
+        lines.append(f"  Kaynak dosya: {source.name} (doğrudan .dem)")
+    else:
+        lines.extend(
+            [
+                f"  Kaynak dosya: {source.name}",
+                f"  Kaynak/sıkıştırılmış boyut: {source_bytes} bytes / {source_mb:.2f} MB",
+            ]
+        )
+    lines.append(f"  Neden: {reason}")
+    return "\n".join(lines)
 
 
 def find_replay_conflicts(args: argparse.Namespace) -> list[str]:

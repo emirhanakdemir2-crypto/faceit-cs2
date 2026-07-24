@@ -157,6 +157,137 @@ class ReplayLauncherTests(ReplayLauncherTestCase):
         self.assertEqual(source, good)
         self.assertEqual(path, good.resolve())
 
+    def test_select_smallest_prefers_smaller_playable_dem(self) -> None:
+        demos = self.root / "data" / "demos"
+        demos.mkdir(parents=True)
+        large = demos / "large.dem"
+        large.write_bytes(b"PBDEMS2\x00" + b"x" * 500)
+        small = demos / "small.dem"
+        small.write_bytes(b"PBDEMS2\x00" + b"y" * 50)
+        with patch.object(replay_launcher, "repo_root", lambda: self.root):
+            path, err, source = replay_launcher.select_smallest_valid_demo(demos)
+        self.assertEqual(err, "")
+        self.assertEqual(source, small)
+        self.assertEqual(path, small.resolve())
+
+    @patch.object(replay_launcher, "resolve_demo_path")
+    def test_select_smallest_uses_playable_size_not_compressed_source(
+        self,
+        resolve_mock,
+    ) -> None:
+        demos = self.root / "data" / "demos"
+        demos.mkdir(parents=True)
+        small_dem = demos / "small.dem"
+        small_dem.write_bytes(b"placeholder")
+        tiny_zst = demos / "tiny.dem.zst"
+        tiny_zst.write_bytes(b"z")
+        mid_dem = demos / "mid.dem"
+        mid_dem.write_bytes(b"placeholder")
+
+        playable_small = demos / "playable_small.dem"
+        playable_small.write_bytes(b"PBDEMS2\x00" + b"a" * 50)
+        playable_huge = demos / "playable_huge.dem"
+        playable_huge.write_bytes(b"PBDEMS2\x00" + b"b" * 5000)
+        playable_mid = demos / "playable_mid.dem"
+        playable_mid.write_bytes(b"PBDEMS2\x00" + b"c" * 200)
+
+        def side_effect(raw: str) -> tuple[Path | None, str]:
+            name = Path(raw).name
+            if name == "small.dem":
+                return playable_small, ""
+            if name == "tiny.dem.zst":
+                return playable_huge, ""
+            if name == "mid.dem":
+                return playable_mid, ""
+            return None, "missing"
+
+        resolve_mock.side_effect = side_effect
+        path, err, source = replay_launcher.select_smallest_valid_demo(demos)
+        self.assertEqual(err, "")
+        self.assertEqual(source, small_dem)
+        self.assertEqual(path, playable_small.resolve())
+
+    @patch.object(replay_launcher, "resolve_demo_path")
+    def test_select_smallest_can_pick_extracted_small_playable_from_large_zst(
+        self,
+        resolve_mock,
+    ) -> None:
+        demos = self.root / "data" / "demos"
+        demos.mkdir(parents=True)
+        big_zst = demos / "big.dem.zst"
+        big_zst.write_bytes(b"z" * 4096)
+        large_dem = demos / "large.dem"
+        large_dem.write_bytes(b"placeholder")
+
+        playable_small = demos / "extracted_small.dem"
+        playable_small.write_bytes(b"PBDEMS2\x00" + b"s" * 80)
+        playable_large = demos / "large_playable.dem"
+        playable_large.write_bytes(b"PBDEMS2\x00" + b"l" * 900)
+
+        def side_effect(raw: str) -> tuple[Path | None, str]:
+            name = Path(raw).name
+            if name == "big.dem.zst":
+                return playable_small, ""
+            if name == "large.dem":
+                return playable_large, ""
+            return None, "missing"
+
+        resolve_mock.side_effect = side_effect
+        path, err, source = replay_launcher.select_smallest_valid_demo(demos)
+        self.assertEqual(err, "")
+        self.assertEqual(source, big_zst)
+        self.assertEqual(path, playable_small.resolve())
+
+    @patch.object(replay_launcher, "resolve_demo_path")
+    def test_select_smallest_deduplicates_dem_and_zst_for_same_playable(
+        self,
+        resolve_mock,
+    ) -> None:
+        demos = self.root / "data" / "demos"
+        demos.mkdir(parents=True)
+        native = demos / "match.dem"
+        native.write_bytes(b"PBDEMS2\x00" + b"m" * 64)
+        compressed = demos / "match.dem.zst"
+        compressed.write_bytes(b"z")
+        resolve_mock.side_effect = lambda raw: (native.resolve(), "")
+
+        path, err, source = replay_launcher.select_smallest_valid_demo(demos)
+        self.assertEqual(err, "")
+        self.assertEqual(source, native)
+        self.assertEqual(path, native.resolve())
+
+    @patch.object(replay_launcher, "resolve_demo_path")
+    def test_select_smallest_skips_broken_zst(self, resolve_mock) -> None:
+        demos = self.root / "data" / "demos"
+        demos.mkdir(parents=True)
+        broken = demos / "broken.dem.zst"
+        broken.write_bytes(b"broken")
+        good = demos / "good.dem"
+        good.write_bytes(b"PBDEMS2\x00" + b"g" * 32)
+
+        def side_effect(raw: str) -> tuple[Path | None, str]:
+            if Path(raw).name == "broken.dem.zst":
+                return None, "Çıkarma hatası: corrupt"
+            return good.resolve(), ""
+
+        resolve_mock.side_effect = side_effect
+        path, err, source = replay_launcher.select_smallest_valid_demo(demos)
+        self.assertEqual(err, "")
+        self.assertEqual(source, good)
+        self.assertEqual(path, good.resolve())
+
+    def test_format_demo_selection_shows_playable_and_source_sizes(self) -> None:
+        demos = self.root / "data" / "demos"
+        demos.mkdir(parents=True)
+        source = demos / "tiny.dem.zst"
+        source.write_bytes(b"z" * 10)
+        playable = demos / "tiny.dem"
+        playable.write_bytes(b"PBDEMS2\x00" + b"p" * 100)
+        text = replay_launcher.format_demo_selection(playable, source_path=source)
+        self.assertIn("Oynatılabilir boyut:", text)
+        self.assertIn("Kaynak/sıkıştırılmış boyut:", text)
+        self.assertIn("tiny.dem.zst", text)
+
     def test_main_replay_demo_smallest_launches_selected_file(self) -> None:
         demos = self.root / "data" / "demos"
         demos.mkdir(parents=True)
@@ -175,6 +306,7 @@ class ReplayLauncherTests(ReplayLauncherTestCase):
         self.assertEqual(code, 0)
         launch_mock.assert_called_once_with(str(demo.resolve()))
         self.assertIn("tiny.dem", buffer.getvalue())
+        self.assertIn("Oynatılabilir boyut:", buffer.getvalue())
         self.assertIn("Neden:", buffer.getvalue())
 
     def test_main_replay_early_exit_without_heavy_flows(self) -> None:
