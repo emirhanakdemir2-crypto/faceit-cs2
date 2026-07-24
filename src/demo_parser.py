@@ -520,6 +520,21 @@ def extract_player_ticks_if_available(
     return result
 
 
+def extract_demo_map_name(parser: Any) -> str | None:
+    """Read map_name from demo header when available."""
+    try:
+        header = parser.parse_header()
+    except Exception:
+        return None
+    if not isinstance(header, dict):
+        return None
+    raw = header.get("map_name") or header.get("map")
+    if not raw:
+        return None
+    text = str(raw).strip()
+    return text or None
+
+
 def extract_duel_tick_rows(parser: Any) -> dict[str, Any]:
     """All-player tick rows required for duel/spotted resolution (no player filter)."""
     result: dict[str, Any] = {
@@ -533,6 +548,8 @@ def extract_duel_tick_rows(parser: Any) -> dict[str, Any]:
         "ducked", "ducking", "team_num", "entity_id",
         "approximate_spotted_by", "spotted", "total_rounds_played",
         "active_weapon_name", "shots_fired",
+        # Geometry visibility candidates (alive/FOV probe fields)
+        "is_alive", "health", "life_state", "fov",
     ]
     try:
         df = parser.parse_ticks(fields)
@@ -558,6 +575,35 @@ def extract_player_hurt_rows(parser: Any, events: list[str] | None = None) -> li
         return _df_records(df)
     except Exception:
         return []
+
+
+def _compute_visibility_agreement_for_demo(
+    *,
+    map_name: str | None,
+    matched_steamid: int | None,
+    shot_rows: list[dict[str, Any]],
+    duel_tick_rows: list[dict[str, Any]],
+    backend: Any | None = None,
+) -> dict[str, Any]:
+    from src.visibility_agreement import compute_visibility_agreement
+
+    if matched_steamid is None:
+        from src.visibility_agreement import _empty_agreement
+
+        return _empty_agreement(reason="matched steamid unavailable", map_name=map_name)
+    ticks: list[int] = []
+    for row in shot_rows:
+        try:
+            ticks.append(int(row.get("tick")))
+        except (TypeError, ValueError):
+            continue
+    return compute_visibility_agreement(
+        map_name=map_name,
+        shooter_steamid=str(matched_steamid),
+        shot_ticks=ticks,
+        tick_rows=duel_tick_rows,
+        backend=backend,
+    )
 
 
 def _compute_v2_for_demo(
@@ -1538,6 +1584,7 @@ def parse_demo_basic(
 
         duel_ticks = extract_duel_tick_rows(parser)
         hurt_rows = extract_player_hurt_rows(parser, events)
+        map_name = extract_demo_map_name(parser)
         proper_cs_v2 = _compute_v2_for_demo(
             demo_id=path.name,
             matched_steamid=matched_steamid,
@@ -1545,8 +1592,16 @@ def parse_demo_basic(
             duel_tick_rows=duel_ticks.get("rows") or [],
             hurt_rows=hurt_rows,
         )
+        visibility_agreement = _compute_visibility_agreement_for_demo(
+            map_name=map_name,
+            matched_steamid=matched_steamid,
+            shot_rows=shots.get("rows") or [],
+            duel_tick_rows=duel_ticks.get("rows") or [],
+        )
         mechanics["proper_counter_strafe_v2"] = proper_cs_v2
         mechanics["legacy_metric_label"] = "legacy_first_bullet_moving"
+        mechanics["visibility_agreement"] = visibility_agreement
+        mechanics["geometry_visibility_diagnostic"] = visibility_agreement
 
         confidence = mechanics.get("rifle_metrics_confidence", mechanics.get("metrics_confidence", "none"))
         if matched and kd["kills"] + kd["deaths"] > 0 and confidence == "none":
@@ -1596,7 +1651,9 @@ def parse_demo_basic(
             "shots_with_velocity": mechanics.get("shots_with_velocity", 0),
             "mechanics": mechanics,
             "impact": impact,
+            "map_name": map_name,
             "proper_counter_strafe_v2": proper_cs_v2,
+            "visibility_agreement": visibility_agreement,
             "events_found": events[:15],
         }
         if debug:
@@ -1873,6 +1930,7 @@ def build_mechanics_summary(
         }
 
     # Always attach V2 (even when legacy velocity metrics are unreliable).
+    aggregated.setdefault("mechanics", {})
     v2_combined = combine_proper_counter_strafe_v2(
         [
             (d.get("proper_counter_strafe_v2") or d.get("mechanics", {}).get("proper_counter_strafe_v2") or {})
@@ -1882,6 +1940,18 @@ def build_mechanics_summary(
     aggregated["mechanics"]["proper_counter_strafe_v2"] = v2_combined
     aggregated["mechanics"]["legacy_metric_label"] = "legacy_first_bullet_moving"
     aggregated["proper_counter_strafe_v2"] = v2_combined
+
+    from src.visibility_agreement import combine_visibility_agreement
+
+    vis_combined = combine_visibility_agreement(
+        [
+            (d.get("visibility_agreement") or d.get("mechanics", {}).get("visibility_agreement") or {})
+            for d in ok_demos
+        ]
+    )
+    aggregated["mechanics"]["visibility_agreement"] = vis_combined
+    aggregated["mechanics"]["geometry_visibility_diagnostic"] = vis_combined
+    aggregated["visibility_agreement"] = vis_combined
 
     aggregated["per_demo_cards"] = per_demo_cards
 

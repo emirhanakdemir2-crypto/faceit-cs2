@@ -221,6 +221,33 @@ def render_mechanics_lab_markdown(lab: dict[str, Any]) -> list[str]:
         "",
     ])
 
+    # --- Geometry visibility agreement (diagnostic only) ---
+    vis = mech.get("visibility_agreement") or mech.get("geometry_visibility_diagnostic") or {}
+    vb = vis.get("buckets") or {}
+    lines.extend([
+        "### Geometry Visibility Agreement (diagnostic)",
+        "",
+        f"- status: {_fmt(vis.get('status'))}",
+        f"- measurement_quality: {_fmt(vis.get('measurement_quality'))}",
+        f"- backend: {_fmt(vis.get('backend_source'))} {_fmt(vis.get('backend_version'))}",
+        f"- eye_height_source: {_fmt(vis.get('eye_height_source'))}",
+        f"- fov_source: {_fmt(vis.get('fov_source'))}",
+        f"- shot_ticks_analyzed: {_fmt(vis.get('shot_ticks_analyzed'))}",
+        f"- geometry_resolved_count: {_fmt(vis.get('geometry_resolved_count'))}",
+        f"- unavailable_count: {_fmt(vis.get('unavailable_count'))}",
+        f"- agreement_pct / disagreement_pct: {_fmt(vis.get('agreement_pct'))} / {_fmt(vis.get('disagreement_pct'))}",
+        f"- mean_visible_enemy_count: {_fmt(vis.get('mean_visible_enemy_count'))}",
+        f"- geometry_visible_and_spotted: {_fmt(vb.get('geometry_visible_and_spotted'))}",
+        f"- geometry_visible_not_spotted: {_fmt(vb.get('geometry_visible_not_spotted'))}",
+        f"- geometry_blocked_and_spotted: {_fmt(vb.get('geometry_blocked_and_spotted'))}",
+        f"- geometry_blocked_not_spotted: {_fmt(vb.get('geometry_blocked_not_spotted'))}",
+        f"- setup_command: `{_fmt(vis.get('setup_command'))}`",
+        f"- coach_note: {_fmt(vis.get('coach_note'))}",
+        "",
+        "_Geometry LoS smoke/flash/prop desteklemez; V2 headline veya legacy metrikleri değiştirmez. Kesin görünürlük hükmü değildir._",
+        "",
+    ])
+
     # --- AK vs M4 ---
     lines.extend(["### AK vs M4 Breakdown", ""])
     ak = mech.get("ak_metrics") or {}
