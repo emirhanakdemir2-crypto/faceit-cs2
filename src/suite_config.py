@@ -90,3 +90,26 @@ V2_EVIDENCE_UNRESOLVED = "unresolved"
 V2_HEADLINE_EVIDENCE_BUCKETS = (V2_EVIDENCE_SPOTTED_ONLY, V2_EVIDENCE_SPOTTED_AND_HURT)
 V2_DISPLAY_TITLE = "Proper Counter-Strafe V2 (Experimental — approximate spotted data)"
 V2_COACH_SOFT_LABEL = "güçlü counter-strafe adayı"
+
+# Geometry Visibility / LoS V1 (diagnostic only — never promotes V2 to validated)
+GEOMETRY_BACKEND_SOURCE = "awpy.VisibilityChecker"
+GEOMETRY_BACKEND_VERSION_PIN = "2.0.2"
+GEOMETRY_MEASUREMENT_QUALITY = "experimental_geometry_v1"
+GEOMETRY_STATUS_DEPENDENCY_MISSING = "dependency_missing"
+GEOMETRY_STATUS_TRI_MISSING = "tri_missing"
+GEOMETRY_STATUS_UNSUPPORTED_MAP = "unsupported_map"
+GEOMETRY_STATUS_INIT_FAILED = "init_failed"
+GEOMETRY_STATUS_AVAILABLE = "available"
+GEOMETRY_SETUP_COMMAND = "python -m pip install awpy==2.0.2 && awpy get tris"
+# Approximate eye height (Source units) — not demo-derived eye offset.
+GEOMETRY_APPROX_EYE_HEIGHT_STANDING = 64.0
+GEOMETRY_APPROX_EYE_HEIGHT_CROUCHED = 46.0
+GEOMETRY_EYE_HEIGHT_SOURCE = "config_approximate_eye_height_v1"
+# Demo fov field observed as always 0; use config approximate FOV for candidate filter.
+GEOMETRY_APPROX_HORIZONTAL_FOV_DEG = 90.0
+GEOMETRY_FOV_SOURCE = "config_approximate_horizontal_fov_v1"
+GEOMETRY_QUALITY_APPROXIMATE = "geometry_approximate"
+GEOMETRY_AGREEMENT_VISIBLE_SPOTTED = "geometry_visible_and_spotted"
+GEOMETRY_AGREEMENT_VISIBLE_NOT_SPOTTED = "geometry_visible_not_spotted"
+GEOMETRY_AGREEMENT_BLOCKED_SPOTTED = "geometry_blocked_and_spotted"
+GEOMETRY_AGREEMENT_BLOCKED_NOT_SPOTTED = "geometry_blocked_not_spotted"

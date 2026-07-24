@@ -7,3 +7,5 @@ google-genai>=1.0.0
 demoparser2>=0.36.0
 # Opsiyonel — tara modunda panoya kopyalama
 pyperclip>=1.8.2
+# Geometry LoS / VisibilityChecker (H4) — pip install awpy==2.0.2
+awpy==2.0.2

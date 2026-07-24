@@ -22,3 +22,7 @@ env/
 *.log
 .DS_Store
 Thumbs.db
+# Awpy geometry assets / cache (never commit)
+.awpy/
+*.tri
+tris.zip
