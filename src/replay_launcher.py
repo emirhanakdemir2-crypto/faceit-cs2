@@ -11,7 +11,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-from src.demo_parser import COMPRESSED_EXTENSIONS, extract_compressed_demo
+from src.demo_parser import COMPRESSED_EXTENSIONS, DEMO_EXTENSIONS, extract_compressed_demo
 
 console = Console()
 
@@ -24,6 +24,7 @@ DEFAULT_PORT = 3000
 PORT_RANGE_END = 3099
 
 REPLAY_MODE_FLAG = "replay_demo"
+REPLAY_SMALLEST_FLAG = "replay_demo_smallest"
 
 CONFLICTING_ANALYSIS_FLAGS: tuple[tuple[str, str], ...] = (
     ("matches", "--matches"),
@@ -57,6 +58,85 @@ def _is_flag_active(args: argparse.Namespace, attr: str) -> bool:
     if attr in ("matches", "days", "recent", "demo_folder"):
         return getattr(args, attr) is not None
     return bool(getattr(args, attr))
+
+
+def is_dem_header_valid(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            magic = handle.read(8)
+    except OSError:
+        return False
+    return magic.startswith(b"PBDEMS2") or magic.startswith(b"HL2DEMO")
+
+
+def _is_demo_candidate(path: Path) -> bool:
+    name_lower = path.name.lower()
+    return any(name_lower.endswith(ext) for ext in DEMO_EXTENSIONS)
+
+
+def iter_demo_candidates(demos_dir: Path) -> list[Path]:
+    if not demos_dir.is_dir():
+        return []
+    files = [
+        path
+        for path in demos_dir.iterdir()
+        if path.is_file() and _is_demo_candidate(path)
+    ]
+    return sorted(files, key=lambda path: path.stat().st_size)
+
+
+def select_smallest_valid_demo(
+    demos_dir: Path | None = None,
+) -> tuple[Path | None, str, Path | None]:
+    folder = demos_dir or (repo_root() / "data" / "demos")
+    if not folder.is_dir():
+        return None, f"Demo klasörü bulunamadı: {folder}", None
+
+    failures: list[str] = []
+    for candidate in iter_demo_candidates(folder):
+        source_size = candidate.stat().st_size
+        if source_size <= 0:
+            failures.append(f"{candidate.name} ({source_size} B): boş dosya")
+            continue
+
+        resolved, err = resolve_demo_path(str(candidate))
+        if resolved is None:
+            failures.append(f"{candidate.name} ({source_size} B): {err}")
+            continue
+
+        if resolved.stat().st_size <= 0:
+            failures.append(f"{resolved.name}: çıkarılmış demo boş")
+            continue
+
+        if not is_dem_header_valid(resolved):
+            failures.append(f"{resolved.name}: geçersiz demo başlığı")
+            continue
+
+        return resolved, "", candidate
+
+    if failures:
+        return None, "Geçerli demo bulunamadı:\n" + "\n".join(failures), None
+    return None, f"Demo klasöründe dosya yok: {folder}", None
+
+
+def format_demo_selection(
+    path: Path,
+    *,
+    source_path: Path | None = None,
+    reason: str = (
+        "data/demos içinde kaynak dosya boyutuna göre en küçük geçerli demo "
+        "(boş/bozuk dosyalar atlandı, başlık doğrulaması geçti)"
+    ),
+) -> str:
+    size_bytes = path.stat().st_size
+    size_mb = size_bytes / (1024 * 1024)
+    source = source_path or path
+    source_bytes = source.stat().st_size
+    return (
+        f"Seçilen demo: {path.name} "
+        f"({size_bytes} bytes / {size_mb:.2f} MB, kaynak: {source.name}, "
+        f"{source_bytes} bytes). Neden: {reason}."
+    )
 
 
 def find_replay_conflicts(args: argparse.Namespace) -> list[str]:

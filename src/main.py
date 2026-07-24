@@ -49,7 +49,7 @@ from src.session_coach import (
 )
 from src.storage import get_known_match_ids, get_last_analysis, init_db, persist_analysis_run
 from src.counter_strafe_cli import check_orphan_log_args, run_counter_strafe_log_cli
-from src.replay_launcher import find_replay_conflicts, launch_replay_demo
+from src.replay_launcher import find_replay_conflicts, format_demo_selection, launch_replay_demo, select_smallest_valid_demo
 
 console = Console()
 
@@ -121,6 +121,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--replay-demo", type=str, default=None,
         help="Yerel CS2 2D replay viewer aç (.dem veya sıkıştırılmış demo)",
     )
+    parser.add_argument(
+        "--replay-demo-smallest", action="store_true",
+        help="data/demos içindeki en küçük geçerli .dem dosyası ile replay viewer aç",
+    )
     return parser.parse_args(argv)
 
 
@@ -148,6 +152,25 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.log_counter_strafe:
         return run_counter_strafe_log_cli(args, nickname)
+
+    if args.replay_demo_smallest and args.replay_demo:
+        console.print("[red]--replay-demo-smallest ve --replay-demo birlikte kullanılamaz.[/red]")
+        return 1
+
+    if args.replay_demo_smallest:
+        conflicts = find_replay_conflicts(args)
+        if conflicts:
+            console.print(
+                "[red]--replay-demo-smallest yalnızca tek başına kullanılabilir. "
+                f"Çakışan bayraklar: {', '.join(conflicts)}[/red]"
+            )
+            return 1
+        demo_path, err, source_path = select_smallest_valid_demo()
+        if demo_path is None:
+            console.print(f"[red]{err}[/red]")
+            return 1
+        console.print(format_demo_selection(demo_path, source_path=source_path))
+        return launch_replay_demo(str(demo_path))
 
     if args.replay_demo:
         conflicts = find_replay_conflicts(args)

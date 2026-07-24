@@ -131,6 +131,52 @@ class ReplayLauncherTests(ReplayLauncherTestCase):
         self.assertIn("127.0.0.1", cmd)
         browser_mock.assert_called_once_with("http://127.0.0.1:3000/")
 
+    def test_select_smallest_valid_demo_skips_invalid_header(self) -> None:
+        demos = self.root / "data" / "demos"
+        demos.mkdir(parents=True)
+        bad = demos / "bad.dem"
+        bad.write_bytes(b"NOTDEMO")
+        good = demos / "good.dem"
+        good.write_bytes(b"PBDEMS2\x00" + b"x" * 32)
+        with patch.object(replay_launcher, "repo_root", lambda: self.root):
+            path, err, source = replay_launcher.select_smallest_valid_demo(demos)
+        self.assertEqual(err, "")
+        self.assertEqual(source, good)
+        self.assertEqual(path, good.resolve())
+
+    def test_select_smallest_valid_demo_tries_next_candidate(self) -> None:
+        demos = self.root / "data" / "demos"
+        demos.mkdir(parents=True)
+        empty = demos / "empty.dem"
+        empty.write_bytes(b"")
+        good = demos / "tiny.dem"
+        good.write_bytes(b"PBDEMS2\x00" + b"y" * 16)
+        with patch.object(replay_launcher, "repo_root", lambda: self.root):
+            path, err, source = replay_launcher.select_smallest_valid_demo(demos)
+        self.assertEqual(err, "")
+        self.assertEqual(source, good)
+        self.assertEqual(path, good.resolve())
+
+    def test_main_replay_demo_smallest_launches_selected_file(self) -> None:
+        demos = self.root / "data" / "demos"
+        demos.mkdir(parents=True)
+        demo = demos / "tiny.dem"
+        demo.write_bytes(b"PBDEMS2\x00" + b"z" * 12)
+        buffer = StringIO()
+        test_console = replay_launcher.console.__class__(file=buffer, force_terminal=True)
+        with self._patch_viewer_paths():
+            with patch.object(replay_launcher, "repo_root", lambda: self.root):
+                with patch("src.main.console", test_console):
+                    with patch("src.main.launch_replay_demo") as launch_mock:
+                        launch_mock.return_value = 0
+                        code = self._run_main(
+                            ["--nickname", "Jurses", "--replay-demo-smallest"]
+                        )
+        self.assertEqual(code, 0)
+        launch_mock.assert_called_once_with(str(demo.resolve()))
+        self.assertIn("tiny.dem", buffer.getvalue())
+        self.assertIn("Neden:", buffer.getvalue())
+
     def test_main_replay_early_exit_without_heavy_flows(self) -> None:
         demo = self.root / "match.dem"
         demo.write_bytes(b"dem")
@@ -158,3 +204,7 @@ class ReplayArgsTests(unittest.TestCase):
     def test_parse_args_accepts_replay_demo(self) -> None:
         args = parse_args(["--nickname", "Jurses", "--replay-demo", "data/demos/x.dem"])
         self.assertEqual(args.replay_demo, "data/demos/x.dem")
+
+    def test_parse_args_accepts_replay_demo_smallest(self) -> None:
+        args = parse_args(["--nickname", "Jurses", "--replay-demo-smallest"])
+        self.assertTrue(args.replay_demo_smallest)
