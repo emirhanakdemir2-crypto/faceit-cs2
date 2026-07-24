@@ -186,14 +186,14 @@ def launch_replay_demo(
     open_browser: bool = True,
     block: bool = True,
 ) -> int:
-    ready, setup_msg = check_viewer_ready()
-    if not ready:
-        console.print(f"[red]{setup_msg}[/red]")
-        return 1
-
     demo_path, err = resolve_demo_path(demo_path_raw)
     if demo_path is None:
         console.print(f"[red]{err}[/red]")
+        return 1
+
+    ready, setup_msg = check_viewer_ready()
+    if not ready:
+        console.print(f"[red]{setup_msg}[/red]")
         return 1
 
     port = pick_port(host)
