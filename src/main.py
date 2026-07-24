@@ -170,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
             console.print(f"[red]{err}[/red]")
             return 1
         console.print(format_demo_selection(demo_path, source_path=source_path))
-        return launch_replay_demo(str(demo_path))
+        return launch_replay_demo(str(demo_path), nickname=nickname)
 
     if args.replay_demo:
         conflicts = find_replay_conflicts(args)
@@ -180,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"Çakışan bayraklar: {', '.join(conflicts)}[/red]"
             )
             return 1
-        return launch_replay_demo(args.replay_demo)
+        return launch_replay_demo(args.replay_demo, nickname=nickname)
 
     if args.tara:
         if not args.demo_folder:

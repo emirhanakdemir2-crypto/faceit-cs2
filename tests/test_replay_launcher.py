@@ -121,7 +121,7 @@ class ReplayLauncherTests(ReplayLauncherTestCase):
                         with patch("src.replay_launcher.wait_for_server", return_value=True):
                             with patch("src.replay_launcher.webbrowser.open") as browser_mock:
                                 code = replay_launcher.launch_replay_demo(
-                                    str(demo), open_browser=True, block=True
+                                    str(demo), open_browser=True, block=True, nickname="Jurses"
                                 )
 
         self.assertEqual(code, 0)
@@ -129,7 +129,7 @@ class ReplayLauncherTests(ReplayLauncherTestCase):
         cmd = popen_mock.call_args.args[0]
         self.assertIn("--host", cmd)
         self.assertIn("127.0.0.1", cmd)
-        browser_mock.assert_called_once_with("http://127.0.0.1:3000/")
+        browser_mock.assert_called_once_with("http://127.0.0.1:3000/?nickname=Jurses")
 
     def test_select_smallest_valid_demo_skips_invalid_header(self) -> None:
         demos = self.root / "data" / "demos"
@@ -304,7 +304,7 @@ class ReplayLauncherTests(ReplayLauncherTestCase):
                             ["--nickname", "Jurses", "--replay-demo-smallest"]
                         )
         self.assertEqual(code, 0)
-        launch_mock.assert_called_once_with(str(demo.resolve()))
+        launch_mock.assert_called_once_with(str(demo.resolve()), nickname="Jurses")
         self.assertIn("tiny.dem", buffer.getvalue())
         self.assertIn("Oynatılabilir boyut:", buffer.getvalue())
         self.assertIn("Neden:", buffer.getvalue())
@@ -314,7 +314,7 @@ class ReplayLauncherTests(ReplayLauncherTestCase):
         demo.write_bytes(b"dem")
         code, output, launch_mock = self._capture_launch(str(demo))
         self.assertEqual(code, 0)
-        launch_mock.assert_called_once_with(str(demo))
+        launch_mock.assert_called_once_with(str(demo), nickname="Jurses")
         self.assertNotIn("FACEIT CS2 Koçluk", output)
 
     def test_main_replay_conflict_with_analysis_flags(self) -> None:
@@ -330,6 +330,40 @@ class ReplayLauncherTests(ReplayLauncherTestCase):
             sock.bind(("127.0.0.1", port))
             with self.assertRaises(OSError):
                 sock.bind(("0.0.0.0", port))
+
+    def test_build_viewer_url_adds_nickname_query(self) -> None:
+        url = replay_launcher.build_viewer_url("127.0.0.1", 3000, nickname="Jurses")
+        self.assertEqual(url, "http://127.0.0.1:3000/?nickname=Jurses")
+
+    def test_build_viewer_url_omits_empty_nickname(self) -> None:
+        self.assertEqual(
+            replay_launcher.build_viewer_url("127.0.0.1", 3001, nickname="  "),
+            "http://127.0.0.1:3001/",
+        )
+
+    def test_build_viewer_url_encodes_special_characters(self) -> None:
+        url = replay_launcher.build_viewer_url("127.0.0.1", 3002, nickname="Player One")
+        self.assertEqual(url, "http://127.0.0.1:3002/?nickname=Player%20One")
+
+    def test_build_viewer_url_preserves_selected_port(self) -> None:
+        url = replay_launcher.build_viewer_url("127.0.0.1", 3001, nickname="Jurses")
+        self.assertIn(":3001/", url)
+
+    def test_main_replay_passes_nickname_to_launcher(self) -> None:
+        demo = self.root / "match.dem"
+        demo.write_bytes(b"dem")
+        code, _, launch_mock = self._capture_launch(str(demo))
+        self.assertEqual(code, 0)
+        launch_mock.assert_called_once_with(str(demo), nickname="Jurses")
+
+    def test_build_replay_wasm_script_exists(self) -> None:
+        script = replay_launcher.repo_root() / "scripts" / "build_replay_wasm.ps1"
+        self.assertTrue(script.is_file())
+        content = script.read_text(encoding="utf-8")
+        self.assertIn('GOOS = "js"', content)
+        self.assertIn('GOARCH = "wasm"', content)
+        self.assertIn("csdemoparser.wasm", content)
+        self.assertIn("wasm_exec.js", content)
 
 
 class ReplayArgsTests(unittest.TestCase):

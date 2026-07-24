@@ -9,6 +9,7 @@ import time
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 from rich.console import Console
 
@@ -331,6 +332,19 @@ def build_vite_command(port: int, host: str = DEFAULT_HOST) -> list[str]:
     return [npm, "run", "start", "--", "--host", host, "--port", str(port)]
 
 
+def build_viewer_url(
+    host: str,
+    port: int,
+    *,
+    nickname: str | None = None,
+) -> str:
+    base = f"http://{host}:{port}/"
+    cleaned = (nickname or "").strip()
+    if not cleaned:
+        return base
+    return f"{base}?nickname={quote(cleaned)}"
+
+
 def start_vite_process(cmd: list[str], cwd: Path) -> subprocess.Popen[str]:
     popen_kwargs = {
         "cwd": cwd,
@@ -360,6 +374,7 @@ def launch_replay_demo(
     host: str = DEFAULT_HOST,
     open_browser: bool = True,
     block: bool = True,
+    nickname: str | None = None,
 ) -> int:
     demo_path, err = resolve_demo_path(demo_path_raw)
     if demo_path is None:
@@ -400,7 +415,7 @@ def launch_replay_demo(
         console.print("[red]Viewer sunucusu zaman aşımına uğradı.[/red]")
         return 1
 
-    url = f"http://{host}:{port}/"
+    url = build_viewer_url(host, port, nickname=nickname)
     console.print()
     console.print("[bold cyan]CS2 2D Replay Viewer[/bold cyan]")
     console.print(f"Viewer: [link={url}]{url}[/link]")
