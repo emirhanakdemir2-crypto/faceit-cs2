@@ -8,6 +8,8 @@ data/reports/
 data/db/
 data/ai_exports/
 data/demos/
+data/maps3d/
+third_party/cs2-2d-demo-viewer/web/public/maps3d-cache/
 *.egg-info/
 .eggs/
 dist/

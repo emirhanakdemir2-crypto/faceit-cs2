@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "mapName": "synthetic_test_arena",
+  "source": "project_generated_fixture",
+  "sourceTool": "synthetic_test_map_generator",
+  "sourceClientVersion": null,
+  "coordinateFrame": "source2_world_z_up",
+  "units": "hammer_units",
+  "viewerTransformVersion": 1,
+  "sceneFile": "scene.glb",
+  "sceneSha256": null,
+  "generatedAt": null,
+  "licenseNotice": "Synthetic test geometry; not a Valve asset."
+}

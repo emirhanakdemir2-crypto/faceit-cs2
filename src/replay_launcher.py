@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import socket
 import subprocess
@@ -14,6 +15,7 @@ from urllib.parse import quote
 from rich.console import Console
 
 from src.demo_parser import COMPRESSED_EXTENSIONS, DEMO_EXTENSIONS, extract_compressed_demo
+from src.map_asset_server import MapAssetServer, optimized_maps_root
 
 console = Console()
 
@@ -345,16 +347,35 @@ def build_viewer_url(
     return f"{base}?nickname={quote(cleaned)}"
 
 
-def start_vite_process(cmd: list[str], cwd: Path) -> subprocess.Popen[str]:
+def start_vite_process(
+    cmd: list[str],
+    cwd: Path,
+    env: dict[str, str] | None = None,
+) -> subprocess.Popen[str]:
+    merged_env = os.environ.copy()
+    if env:
+        merged_env.update(env)
     popen_kwargs = {
         "cwd": cwd,
         "stdout": subprocess.PIPE,
         "stderr": subprocess.STDOUT,
         "text": True,
+        "env": merged_env,
     }
     if sys.platform == "win32":
         return subprocess.Popen(subprocess.list2cmdline(cmd), shell=True, **popen_kwargs)
     return subprocess.Popen(cmd, **popen_kwargs)
+
+
+def start_map_asset_server(host: str = DEFAULT_HOST) -> MapAssetServer | None:
+    root = optimized_maps_root(repo_root())
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        server = MapAssetServer(root, host=host, port=0)
+        server.start()
+        return server
+    except OSError:
+        return None
 
 
 def wait_for_server(host: str, port: int, timeout: float = 30.0) -> bool:
@@ -394,20 +415,30 @@ def launch_replay_demo(
         return 1
 
     web = viewer_web_dir()
+    map_server = start_map_asset_server(host)
+    vite_env: dict[str, str] = {}
+    if map_server is not None:
+        vite_env["VITE_MAP_ASSET_BASE"] = map_server.base_url
     try:
         cmd = build_vite_command(port, host)
     except RuntimeError as exc:
+        if map_server is not None:
+            map_server.stop()
         console.print(f"[red]{exc}[/red]")
         return 1
 
     try:
-        proc = start_vite_process(cmd, web)
+        proc = start_vite_process(cmd, web, vite_env)
     except OSError as exc:
+        if map_server is not None:
+            map_server.stop()
         console.print(f"[red]Viewer sunucusu başlatılamadı: {exc}[/red]")
         return 1
 
     if not wait_for_server(host, port):
         proc.terminate()
+        if map_server is not None:
+            map_server.stop()
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -420,6 +451,8 @@ def launch_replay_demo(
     console.print("[bold cyan]CS2 2D Replay Viewer[/bold cyan]")
     console.print(f"Viewer: [link={url}]{url}[/link]")
     console.print(f"Demo: [bold]{demo_path}[/bold]")
+    if map_server is not None:
+        console.print(f"Map assets: [link={map_server.base_url}]{map_server.base_url}[/link]")
     console.print()
     console.print(
         "[yellow]Tarayıcı güvenliği nedeniyle demo otomatik yüklenemez.[/yellow]\n"
@@ -438,5 +471,10 @@ def launch_replay_demo(
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+        finally:
+            if map_server is not None:
+                map_server.stop()
+    elif map_server is not None:
+        map_server.stop()
 
     return 0
