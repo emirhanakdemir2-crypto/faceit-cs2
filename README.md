@@ -100,6 +100,22 @@ python -m src.main --nickname Jurses --replay-demo "data/demos/demo.dem"
 
 Replay modu FACEIT API, AI, suite, tara veya demo analiz akışlarını çalıştırmaz. Viewer yalnızca `127.0.0.1` üzerinde açılır; tarayıcı güvenliği nedeniyle ana sayfadaki upload alanından demo dosyasını manuel seçmeniz gerekir.
 
+### Replay Map Context V1 (viewer)
+
+Upstream viewer submodule içinde yerel geliştirmeler:
+
+- Oynatma hızı: `0.5×`, `1×`, `2×` (varsayılan `1×`)
+- Zoom: `1×` / `2×` / `3×` / `Reset`, mouse wheel ile senkron
+- `requestAnimationFrame` + tick arası position/yaw interpolation (parse tekrarlanmaz)
+- Aim direction: parser `rotation` alanı (`ViewDirectionX` türevi); katman `All / Selected only / Off`
+- Oyuncu seçimi: harita veya liste tıklama → `2×` odak + follow (easing)
+
+Viewer testleri:
+
+```powershell
+npm test --prefix third_party/cs2-2d-demo-viewer/web
+```
+
 Attribution: `docs/third_party/cs2-2d-demo-viewer.md`
 
 ## Kullanım
