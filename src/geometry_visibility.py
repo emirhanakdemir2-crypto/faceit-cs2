@@ -203,7 +203,12 @@ class GeometryVisibilityBackend:
 
         key = str(resolved["map_name"])
         if key not in self._cache:
+            # Keep only one map checker resident to bound BVH memory.
+            if self._cache:
+                self._cache.clear()
             try:
+                import gc
+                gc.collect()
                 tri = Path(str(resolved["tri_path"]))
                 self._cache[key] = self._checker_factory(tri)
                 self._create_counts[key] = self._create_counts.get(key, 0) + 1
@@ -223,6 +228,7 @@ class GeometryVisibilityBackend:
         self.last_status["status"] = cfg.GEOMETRY_STATUS_AVAILABLE
         self.last_status["checker_cached"] = True
         self.last_status["create_count_for_map"] = self._create_counts.get(key, 0)
+        self.last_status["cached_maps"] = sorted(self._cache.keys())
         return self.last_status
 
     def get_checker(self, map_name: str | None) -> Any | None:

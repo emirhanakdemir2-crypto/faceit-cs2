@@ -376,6 +376,9 @@ def compute_visibility_agreement(
     visible_counts: list[int] = []
     analyzed = 0
 
+    # Deterministic: process shot ticks in ascending order, preserve duplicates
+    # as separate analyzed shots (same as prior H4 behavior on input order...
+    # H4 iterated shot_ticks as provided from shot_rows order). Keep input order.
     for tick in shot_ticks:
         frame = by_tick.get(int(tick)) or []
         if not frame:

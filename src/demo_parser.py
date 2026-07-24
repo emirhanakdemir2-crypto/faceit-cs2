@@ -480,8 +480,13 @@ def extract_player_ticks_if_available(
     matched_name: str | None,
     *,
     matched_steamid: int | None = None,
+    ticks: list[int] | None = None,
 ) -> dict[str, Any]:
-    """Oyuncuya ait tick/velocity verisini çıkarır."""
+    """Oyuncuya ait tick/velocity verisini çıkarır.
+
+    Optional ``ticks`` uses demoparser2 ``parse_ticks(..., ticks=)`` to avoid
+    materializing the full per-player tick matrix.
+    """
     result: dict[str, Any] = {
         "available": False,
         "tick_count": 0,
@@ -490,7 +495,13 @@ def extract_player_ticks_if_available(
         "columns": [],
         "reason": "",
         "velocity_field": None,
+        "sampling": "full" if ticks is None else "shot_window",
+        "ticks_filter_count": 0 if ticks is None else len(ticks),
     }
+    if ticks is not None and len(ticks) == 0:
+        result["reason"] = "no shot ticks for player velocity sampling"
+        result["sampling"] = "shot_window_empty"
+        return result
     try:
         kwargs: dict[str, Any] = {}
         if matched_steamid is not None:
@@ -498,10 +509,13 @@ def extract_player_ticks_if_available(
         elif matched_name:
             result["reason"] = "SteamID yok; parse_ticks için steamid gerekli."
             return result
+        if ticks is not None:
+            kwargs["ticks"] = list(ticks)
 
         df = parser.parse_ticks(["X", "Y", "Z", "velocity", "name", "steamid"], **kwargs)
         rows = _df_records(df)
-        result["columns"] = list(df.columns) if hasattr(df, "columns") else []
+        del df
+        result["columns"] = sorted({k for row in rows for k in row}) if rows else []
         result["tick_count"] = len(rows)
         result["rows"] = rows
         velocity_field = "velocity" if "velocity" in result["columns"] else None
@@ -515,6 +529,12 @@ def extract_player_ticks_if_available(
             result["reason"] = "Tick verisi boş döndü."
         elif result["velocity_ticks"] == 0:
             result["reason"] = "Tick verisi var ancak velocity alanı boş."
+    except TypeError as exc:
+        if ticks is not None:
+            result["reason"] = f"parse_ticks ticks= filtresi desteklenmiyor: {exc}"
+            result["sampling"] = "ticks_filter_unsupported"
+        else:
+            result["reason"] = f"Tick verisi alınamadı: {exc}"
     except Exception as exc:
         result["reason"] = f"Tick verisi alınamadı: {exc}"
     return result
@@ -535,14 +555,52 @@ def extract_demo_map_name(parser: Any) -> str | None:
     return text or None
 
 
-def extract_duel_tick_rows(parser: Any) -> dict[str, Any]:
-    """All-player tick rows required for duel/spotted resolution (no player filter)."""
+def collect_shot_tick_window(
+    shot_rows: list[dict[str, Any]],
+    *,
+    tolerance: int | None = None,
+) -> list[int]:
+    """Unique sorted ticks covering each shot tick ± tolerance (inclusive)."""
+    from src import suite_config as cfg
+
+    tol = cfg.V2_TICK_MATCH_TOLERANCE if tolerance is None else int(tolerance)
+    if tol < 0:
+        tol = 0
+    needed: set[int] = set()
+    for row in shot_rows:
+        try:
+            tick = int(row.get("tick"))
+        except (TypeError, ValueError):
+            continue
+        for delta in range(-tol, tol + 1):
+            needed.add(tick + delta)
+    return sorted(needed)
+
+
+def extract_duel_tick_rows(
+    parser: Any,
+    *,
+    ticks: list[int] | None = None,
+) -> dict[str, Any]:
+    """All-player tick rows for duel/spotted/geometry.
+
+    When ``ticks`` is provided, uses demoparser2 ``parse_ticks(..., ticks=)`` so
+    the full match tick matrix is never materialized. Empty ``ticks`` skips parse.
+    """
     result: dict[str, Any] = {
         "available": False,
         "rows": [],
         "columns": [],
         "reason": "",
+        "ticks_filter": None if ticks is None else list(ticks),
+        "ticks_filter_count": 0 if ticks is None else len(ticks),
+        "sampling": "full" if ticks is None else "shot_window",
     }
+    if ticks is not None and len(ticks) == 0:
+        result["reason"] = "no shot ticks for duel/geometry sampling"
+        result["sampling"] = "shot_window_empty"
+        return result
+
     fields = [
         "X", "Y", "Z", "pitch", "yaw", "velocity", "max_speed",
         "ducked", "ducking", "team_num", "entity_id",
@@ -552,13 +610,27 @@ def extract_duel_tick_rows(parser: Any) -> dict[str, Any]:
         "is_alive", "health", "life_state", "fov",
     ]
     try:
-        df = parser.parse_ticks(fields)
+        kwargs: dict[str, Any] = {}
+        if ticks is not None:
+            kwargs["ticks"] = list(ticks)
+        df = parser.parse_ticks(fields, **kwargs)
         rows = _df_records(df)
-        result["columns"] = list(df.columns) if hasattr(df, "columns") else []
+        # Drop DataFrame promptly; only row dicts are retained by callers.
+        del df
+        result["columns"] = sorted({k for row in rows for k in row}) if rows else []
         result["rows"] = rows
         result["available"] = len(rows) > 0
         if not result["available"]:
             result["reason"] = "Duel tick verisi boş."
+    except TypeError as exc:
+        # Older demoparser without ticks= — surface clearly, do not invent full parse.
+        if ticks is not None:
+            result["reason"] = (
+                f"parse_ticks ticks= filtresi desteklenmiyor: {exc}"
+            )
+            result["sampling"] = "ticks_filter_unsupported"
+        else:
+            result["reason"] = f"Duel tick verisi alınamadı: {exc}"
     except Exception as exc:
         result["reason"] = f"Duel tick verisi alınamadı: {exc}"
     return result
@@ -584,6 +656,7 @@ def _compute_visibility_agreement_for_demo(
     shot_rows: list[dict[str, Any]],
     duel_tick_rows: list[dict[str, Any]],
     backend: Any | None = None,
+    sampling_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from src.visibility_agreement import compute_visibility_agreement
 
@@ -597,13 +670,18 @@ def _compute_visibility_agreement_for_demo(
             ticks.append(int(row.get("tick")))
         except (TypeError, ValueError):
             continue
-    return compute_visibility_agreement(
+    result = compute_visibility_agreement(
         map_name=map_name,
         shooter_steamid=str(matched_steamid),
         shot_ticks=ticks,
         tick_rows=duel_tick_rows,
         backend=backend,
     )
+    if sampling_meta:
+        result["sampling"] = dict(sampling_meta)
+        # Never embed raw tick matrices in the diagnostic payload.
+        result["sampling"].pop("rows", None)
+    return result
 
 
 def _compute_v2_for_demo(
@@ -1567,8 +1645,15 @@ def parse_demo_basic(
         shots = extract_shot_events_if_available(
             parser, matched_name, nickname, matched_steamid=matched_steamid,
         )
+        shot_rows = shots.get("rows") or []
+        tick_window = collect_shot_tick_window(shot_rows)
+
+        # Player velocity ticks: only shot±tolerance window (legacy match uses ±2).
         ticks = extract_player_ticks_if_available(
-            parser, matched_name, matched_steamid=matched_steamid,
+            parser,
+            matched_name,
+            matched_steamid=matched_steamid,
+            ticks=tick_window,
         )
 
         mechanics: dict[str, Any] = {
@@ -1576,33 +1661,51 @@ def parse_demo_basic(
             "metrics_confidence": "none",
             "note": "Shot event var ama player velocity alanı bulunamadı.",
         }
-        if shots.get("available") and shots.get("rows"):
+        if shots.get("available") and shot_rows:
             mechanics = _build_full_mechanics(
-                shots["rows"],
+                shot_rows,
                 tick_rows=ticks.get("rows") or [],
             )
+        # Free per-player tick matrix before geometry BVH load.
+        ticks["rows"] = []
 
-        duel_ticks = extract_duel_tick_rows(parser)
+        duel_ticks = extract_duel_tick_rows(parser, ticks=tick_window)
         hurt_rows = extract_player_hurt_rows(parser, events)
         map_name = extract_demo_map_name(parser)
+        duel_rows = duel_ticks.get("rows") or []
+
+        import gc
+        gc.collect()
+
         proper_cs_v2 = _compute_v2_for_demo(
             demo_id=path.name,
             matched_steamid=matched_steamid,
-            shot_rows=shots.get("rows") or [],
-            duel_tick_rows=duel_ticks.get("rows") or [],
+            shot_rows=shot_rows,
+            duel_tick_rows=duel_rows,
             hurt_rows=hurt_rows,
         )
         visibility_agreement = _compute_visibility_agreement_for_demo(
             map_name=map_name,
             matched_steamid=matched_steamid,
-            shot_rows=shots.get("rows") or [],
-            duel_tick_rows=duel_ticks.get("rows") or [],
+            shot_rows=shot_rows,
+            duel_tick_rows=duel_rows,
+            sampling_meta={
+                "mode": duel_ticks.get("sampling"),
+                "shot_rows": len(shot_rows),
+                "ticks_filter_count": duel_ticks.get("ticks_filter_count"),
+                "duel_rows_loaded": len(duel_rows),
+                "player_tick_sampling": ticks.get("sampling"),
+            },
         )
+        # Release duel tick matrices before impact/other work.
+        duel_ticks["rows"] = []
+        del duel_rows
+        gc.collect()
+
         mechanics["proper_counter_strafe_v2"] = proper_cs_v2
         mechanics["legacy_metric_label"] = "legacy_first_bullet_moving"
         mechanics["visibility_agreement"] = visibility_agreement
         mechanics["geometry_visibility_diagnostic"] = visibility_agreement
-
         confidence = mechanics.get("rifle_metrics_confidence", mechanics.get("metrics_confidence", "none"))
         if matched and kd["kills"] + kd["deaths"] > 0 and confidence == "none":
             confidence = "low"
