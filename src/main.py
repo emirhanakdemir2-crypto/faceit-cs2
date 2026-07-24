@@ -49,6 +49,7 @@ from src.session_coach import (
 )
 from src.storage import get_known_match_ids, get_last_analysis, init_db, persist_analysis_run
 from src.counter_strafe_cli import check_orphan_log_args, run_counter_strafe_log_cli
+from src.replay_launcher import find_replay_conflicts, launch_replay_demo
 
 console = Console()
 
@@ -116,6 +117,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--evidence-path", type=str, default=None,
         help="Screenshot kanıt dosya yolu (opsiyonel, mevcut dosya olmalı)",
     )
+    parser.add_argument(
+        "--replay-demo", type=str, default=None,
+        help="Yerel CS2 2D replay viewer aç (.dem veya sıkıştırılmış demo)",
+    )
     return parser.parse_args(argv)
 
 
@@ -143,6 +148,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.log_counter_strafe:
         return run_counter_strafe_log_cli(args, nickname)
+
+    if args.replay_demo:
+        conflicts = find_replay_conflicts(args)
+        if conflicts:
+            console.print(
+                "[red]--replay-demo yalnızca tek başına kullanılabilir. "
+                f"Çakışan bayraklar: {', '.join(conflicts)}[/red]"
+            )
+            return 1
+        return launch_replay_demo(args.replay_demo)
 
     if args.tara:
         if not args.demo_folder:

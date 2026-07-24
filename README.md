@@ -70,6 +70,38 @@ python -m src.main --nickname Jurses --post-session
 
 Session coach çalıştırıldığında `data/reports/{nickname}_clip_review_template.md` oluşturulur. Maç sonrası 1 kritik round/death için doldurun; bir sonraki maça tek ders çıkarın.
 
+## 2D Replay Viewer (POC)
+
+Yerel CS2 2D demo viewer entegrasyonu (`third_party/cs2-2d-demo-viewer`, MIT, pinned submodule).
+
+Ön koşullar:
+
+- Git submodule init
+- Node.js + npm
+- Go (WASM parser build için; upstream `web/public/wasm/` commit edilmez)
+
+Kurulum (ilk kez):
+
+```powershell
+git submodule update --init third_party/cs2-2d-demo-viewer
+npm install --prefix third_party/cs2-2d-demo-viewer/web
+# Go kuruluysa WASM build (Windows PowerShell):
+cd third_party/cs2-2d-demo-viewer/parser
+$env:GOOS="js"; $env:GOARCH="wasm"
+go build -ldflags="-s -w" -o ..\web\public\wasm\csdemoparser.wasm .\wasm.go
+Copy-Item "$env:GOROOT\lib\wasm\wasm_exec.js" ..\web\public\wasm\wasm_exec.js
+```
+
+Kullanım:
+
+```powershell
+python -m src.main --nickname Jurses --replay-demo "data/demos/demo.dem"
+```
+
+Replay modu FACEIT API, AI, suite, tara veya demo analiz akışlarını çalıştırmaz. Viewer yalnızca `127.0.0.1` üzerinde açılır; tarayıcı güvenliği nedeniyle demo dosyasını ekrandan manuel seçmeniz gerekir.
+
+Attribution: `docs/third_party/cs2-2d-demo-viewer.md`
+
 ## Kullanım
 
 ```powershell

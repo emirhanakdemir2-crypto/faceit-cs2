@@ -22,3 +22,6 @@ env/
 *.log
 .DS_Store
 Thumbs.db
+third_party/cs2-2d-demo-viewer/web/node_modules/
+third_party/cs2-2d-demo-viewer/web/dist/
+third_party/cs2-2d-demo-viewer/web/public/wasm/
