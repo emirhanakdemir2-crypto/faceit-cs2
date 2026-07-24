@@ -98,7 +98,7 @@ Kullanım:
 python -m src.main --nickname Jurses --replay-demo "data/demos/demo.dem"
 ```
 
-Replay modu FACEIT API, AI, suite, tara veya demo analiz akışlarını çalıştırmaz. Viewer yalnızca `127.0.0.1` üzerinde açılır; tarayıcı güvenliği nedeniyle demo dosyasını ekrandan manuel seçmeniz gerekir.
+Replay modu FACEIT API, AI, suite, tara veya demo analiz akışlarını çalıştırmaz. Viewer yalnızca `127.0.0.1` üzerinde açılır; tarayıcı güvenliği nedeniyle ana sayfadaki upload alanından demo dosyasını manuel seçmeniz gerekir.
 
 Attribution: `docs/third_party/cs2-2d-demo-viewer.md`
 

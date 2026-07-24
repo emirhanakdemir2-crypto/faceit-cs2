@@ -129,7 +129,7 @@ class ReplayLauncherTests(ReplayLauncherTestCase):
         cmd = popen_mock.call_args.args[0]
         self.assertIn("--host", cmd)
         self.assertIn("127.0.0.1", cmd)
-        browser_mock.assert_called_once_with("http://127.0.0.1:3000/player")
+        browser_mock.assert_called_once_with("http://127.0.0.1:3000/")
 
     def test_main_replay_early_exit_without_heavy_flows(self) -> None:
         demo = self.root / "match.dem"

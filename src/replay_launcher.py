@@ -4,6 +4,7 @@ import argparse
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import webbrowser
 from pathlib import Path
@@ -168,6 +169,18 @@ def build_vite_command(port: int, host: str = DEFAULT_HOST) -> list[str]:
     return [npm, "run", "start", "--", "--host", host, "--port", str(port)]
 
 
+def start_vite_process(cmd: list[str], cwd: Path) -> subprocess.Popen[str]:
+    popen_kwargs = {
+        "cwd": cwd,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,
+        "text": True,
+    }
+    if sys.platform == "win32":
+        return subprocess.Popen(subprocess.list2cmdline(cmd), shell=True, **popen_kwargs)
+    return subprocess.Popen(cmd, **popen_kwargs)
+
+
 def wait_for_server(host: str, port: int, timeout: float = 30.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -211,13 +224,7 @@ def launch_replay_demo(
         return 1
 
     try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=web,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        proc = start_vite_process(cmd, web)
     except OSError as exc:
         console.print(f"[red]Viewer sunucusu başlatılamadı: {exc}[/red]")
         return 1
@@ -231,7 +238,7 @@ def launch_replay_demo(
         console.print("[red]Viewer sunucusu zaman aşımına uğradı.[/red]")
         return 1
 
-    url = f"http://{host}:{port}/player"
+    url = f"http://{host}:{port}/"
     console.print()
     console.print("[bold cyan]CS2 2D Replay Viewer[/bold cyan]")
     console.print(f"Viewer: [link={url}]{url}[/link]")
@@ -239,7 +246,7 @@ def launch_replay_demo(
     console.print()
     console.print(
         "[yellow]Tarayıcı güvenliği nedeniyle demo otomatik yüklenemez.[/yellow]\n"
-        "Player sayfasında ekrandan demo dosyanızı seçin."
+        "Ana sayfadaki upload alanından demo dosyanızı seçin; ardından player açılır."
     )
 
     if open_browser:
