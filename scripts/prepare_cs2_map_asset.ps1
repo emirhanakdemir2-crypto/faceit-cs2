@@ -133,7 +133,7 @@ if ($WhatIf) {
 }
 
 New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
-$tempGlb = Join-Path $TargetDir "scene.glb.tmp"
+$tempGlb = Join-Path $TargetDir "scene.tmp.glb"
 
 switch ($tool.Name) {
     "gltfpack" {
@@ -177,7 +177,8 @@ $manifest = @{
     licenseNotice = "Local user-provided game asset; do not commit or redistribute."
 }
 $manifestPath = Join-Path $TargetDir "manifest.json"
-$manifest | ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 $manifestPath
+$manifestJson = $manifest | ConvertTo-Json -Depth 6
+[System.IO.File]::WriteAllText($manifestPath, $manifestJson, [System.Text.UTF8Encoding]::new($false))
 
 Write-Log "Prepared map asset at $TargetDir"
 Write-Log "sceneSha256=$sha"
