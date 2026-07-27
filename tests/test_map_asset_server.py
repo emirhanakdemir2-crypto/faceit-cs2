@@ -9,6 +9,8 @@ from pathlib import Path
 import urllib.request
 
 from src.map_asset_server import (
+    CORS_ALLOW_HEADERS,
+    CORS_EXPOSE_HEADERS,
     MapAssetServer,
     MapAssetServerError,
     cors_allow_origin,
@@ -121,6 +123,25 @@ class MapAssetServerTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(headers.get("Access-Control-Allow-Origin"), "http://127.0.0.1:3000")
+        self.assertEqual(headers.get("Vary"), "Origin")
+        self.assertEqual(headers.get("Access-Control-Expose-Headers"), CORS_EXPOSE_HEADERS)
+        self.assertNotIn("Access-Control-Allow-Methods", headers)
+
+    def test_cors_allows_dynamic_loopback_port(self) -> None:
+        status, _, headers = self._fetch(
+            "/local-map-assets/synthetic_test_arena/manifest.json",
+            headers={"Origin": "http://127.0.0.1:64221"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "http://127.0.0.1:64221")
+
+    def test_cors_allows_localhost_origin(self) -> None:
+        status, _, headers = self._fetch(
+            "/local-map-assets/synthetic_test_arena/manifest.json",
+            headers={"Origin": "http://localhost:3002"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "http://localhost:3002")
 
     def test_cors_blocks_non_loopback_origin(self) -> None:
         status, _, headers = self._fetch(
@@ -129,6 +150,29 @@ class MapAssetServerTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertNotIn("Access-Control-Allow-Origin", headers)
+
+    def test_cors_blocks_evil_subdomain_origin(self) -> None:
+        status, _, headers = self._fetch(
+            "/local-map-assets/synthetic_test_arena/manifest.json",
+            headers={"Origin": "http://127.0.0.1.evil.example:3002"},
+        )
+        self.assertEqual(status, 200)
+        self.assertNotIn("Access-Control-Allow-Origin", headers)
+
+    def test_cors_glb_range_includes_expose_headers(self) -> None:
+        status, body, headers = self._fetch(
+            "/local-map-assets/synthetic_test_arena/scene.glb",
+            headers={
+                "Origin": "http://127.0.0.1:3002",
+                "Range": "bytes=0-4",
+            },
+        )
+        self.assertEqual(status, 206)
+        self.assertEqual(body, self.scene_bytes[:5])
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "http://127.0.0.1:3002")
+        self.assertEqual(headers.get("Vary"), "Origin")
+        self.assertEqual(headers.get("Access-Control-Expose-Headers"), CORS_EXPOSE_HEADERS)
+        self.assertIn("Content-Range", headers)
 
     def test_cors_preflight_for_range(self) -> None:
         request = urllib.request.Request(
@@ -144,12 +188,33 @@ class MapAssetServerTests(unittest.TestCase):
             headers = dict(response.headers.items())
         self.assertEqual(response.status, 204)
         self.assertEqual(headers.get("Access-Control-Allow-Origin"), "http://127.0.0.1:3000")
+        self.assertEqual(headers.get("Vary"), "Origin")
         self.assertIn("GET", headers.get("Access-Control-Allow-Methods", ""))
+        self.assertEqual(headers.get("Access-Control-Allow-Headers"), CORS_ALLOW_HEADERS)
+        self.assertEqual(headers.get("Access-Control-Expose-Headers"), CORS_EXPOSE_HEADERS)
+
+    def test_cors_preflight_private_network_access(self) -> None:
+        request = urllib.request.Request(
+            f"{self.server.base_url}/local-map-assets/synthetic_test_arena/manifest.json",
+            method="OPTIONS",
+            headers={
+                "Origin": "http://127.0.0.1:3002",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "range",
+                "Access-Control-Request-Private-Network": "true",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            headers = dict(response.headers.items())
+        self.assertEqual(response.status, 204)
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "http://127.0.0.1:3002")
+        self.assertEqual(headers.get("Access-Control-Allow-Private-Network"), "true")
 
     def test_cors_allow_origin_helper(self) -> None:
         self.assertEqual(cors_allow_origin("http://127.0.0.1:3000"), "http://127.0.0.1:3000")
         self.assertEqual(cors_allow_origin("http://localhost:5173"), "http://localhost:5173")
         self.assertIsNone(cors_allow_origin("https://example.com"))
+        self.assertIsNone(cors_allow_origin("http://127.0.0.1.evil.example:3002"))
 
 
 if __name__ == "__main__":

@@ -14,6 +14,9 @@ ROUTE_PREFIX = "/local-map-assets/"
 ALLOWED_RELATIVE_FILES = frozenset({"scene.glb", "manifest.json"})
 MAP_SEGMENT_PATTERN = re.compile(r"^[a-z0-9_]+$")
 LOOPBACK_ORIGIN_PATTERN = re.compile(r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$", re.IGNORECASE)
+CORS_EXPOSE_HEADERS = "Content-Length, Content-Range, Accept-Ranges"
+CORS_ALLOW_METHODS = "GET, HEAD, OPTIONS"
+CORS_ALLOW_HEADERS = "Range"
 
 
 def cors_allow_origin(origin: str | None) -> str | None:
@@ -69,18 +72,21 @@ class MapAssetRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:  # noqa: A003
         return
 
-    def _write_cors_headers(self) -> None:
+    def _write_cors_headers(self, *, preflight: bool = False) -> None:
         allowed = cors_allow_origin(self.headers.get("Origin"))
         if not allowed:
             return
         self.send_header("Access-Control-Allow-Origin", allowed)
         self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Range")
-        self.send_header(
-            "Access-Control-Expose-Headers",
-            "Content-Length, Content-Range, Accept-Ranges",
-        )
+        if preflight:
+            self.send_header("Access-Control-Allow-Methods", CORS_ALLOW_METHODS)
+            self.send_header("Access-Control-Allow-Headers", CORS_ALLOW_HEADERS)
+            if (
+                self.headers.get("Access-Control-Request-Private-Network", "").lower()
+                == "true"
+            ):
+                self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Access-Control-Expose-Headers", CORS_EXPOSE_HEADERS)
 
     def _send_error_with_cors(self, code: int) -> None:
         self.send_response(code)
@@ -95,7 +101,7 @@ class MapAssetRequestHandler(BaseHTTPRequestHandler):
             self._send_error_with_cors(404)
             return
         self.send_response(204)
-        self._write_cors_headers()
+        self._write_cors_headers(preflight=True)
         self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
