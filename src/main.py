@@ -110,8 +110,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--avg-kill-score", type=float, default=None, help="Counter-strafe avg kill score")
     parser.add_argument("--avg-speed", type=float, default=None, help="Counter-strafe avg speed")
     parser.add_argument("--avg-timing-ms", type=float, default=None, help="Counter-strafe avg timing (ms)")
-    parser.add_argument("--avg-technique-pct", type=float, default=None, help="Counter-strafe avg technique %")
-    parser.add_argument("--hit-accuracy-pct", type=float, default=None, help="Counter-strafe hit accuracy %")
+    parser.add_argument("--avg-technique-pct", type=float, default=None, help="Counter-strafe avg technique %%")
+    parser.add_argument("--hit-accuracy-pct", type=float, default=None, help="Counter-strafe hit accuracy %%")
     parser.add_argument("--notes", type=str, default=None, help="Counter-strafe oturum notu (opsiyonel)")
     parser.add_argument(
         "--evidence-path", type=str, default=None,

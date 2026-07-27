@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import socket
+import subprocess
+import sys
 import tempfile
 import unittest
 from io import StringIO
@@ -374,3 +376,23 @@ class ReplayArgsTests(unittest.TestCase):
     def test_parse_args_accepts_replay_demo_smallest(self) -> None:
         args = parse_args(["--nickname", "Jurses", "--replay-demo-smallest"])
         self.assertTrue(args.replay_demo_smallest)
+
+    def test_parse_args_builds_parser_without_help_format_error(self) -> None:
+        args = parse_args(["--nickname", "Jurses", "--avg-technique-pct", "42.5"])
+        self.assertEqual(args.avg_technique_pct, 42.5)
+
+    def test_main_help_shows_single_percent_sign(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [sys.executable, "-m", "src.main", "--help"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("Counter-strafe avg technique %", result.stdout)
+        self.assertIn("Counter-strafe hit accuracy %", result.stdout)
+        self.assertNotIn("Counter-strafe avg technique %%", result.stdout)
+        self.assertNotIn("Counter-strafe hit accuracy %%", result.stdout)
