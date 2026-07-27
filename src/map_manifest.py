@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 MAP_NAME_PATTERN = re.compile(r"^[a-z0-9_]+$")
+SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 ALLOWED_MAP_NAMES = frozenset(
     {
         "de_ancient",
@@ -122,6 +123,9 @@ def validate_manifest(
         )
 
     scene_sha = manifest.get("sceneSha256")
+    if scene_sha is not None and scene_sha != "":
+        if not SHA256_PATTERN.fullmatch(str(scene_sha)):
+            errors.append("sceneSha256 must be a lowercase hex SHA-256 digest")
     if scene_path and scene_path.is_file():
         actual_sha = sha256_file(scene_path)
         if scene_sha and scene_sha != actual_sha:
