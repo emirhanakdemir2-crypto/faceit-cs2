@@ -13,6 +13,15 @@ from src.map_manifest import is_valid_map_name
 ROUTE_PREFIX = "/local-map-assets/"
 ALLOWED_RELATIVE_FILES = frozenset({"scene.glb", "manifest.json"})
 MAP_SEGMENT_PATTERN = re.compile(r"^[a-z0-9_]+$")
+LOOPBACK_ORIGIN_PATTERN = re.compile(r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$", re.IGNORECASE)
+
+
+def cors_allow_origin(origin: str | None) -> str | None:
+    if not origin:
+        return None
+    if LOOPBACK_ORIGIN_PATTERN.fullmatch(origin):
+        return origin
+    return None
 
 
 class MapAssetServerError(RuntimeError):
@@ -60,16 +69,45 @@ class MapAssetRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:  # noqa: A003
         return
 
+    def _write_cors_headers(self) -> None:
+        allowed = cors_allow_origin(self.headers.get("Origin"))
+        if not allowed:
+            return
+        self.send_header("Access-Control-Allow-Origin", allowed)
+        self.send_header("Vary", "Origin")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Range")
+        self.send_header(
+            "Access-Control-Expose-Headers",
+            "Content-Length, Content-Range, Accept-Ranges",
+        )
+
+    def _send_error_with_cors(self, code: int) -> None:
+        self.send_response(code)
+        self._write_cors_headers()
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        route = parse_map_asset_path(parsed.path)
+        if route is None:
+            self._send_error_with_cors(404)
+            return
+        self.send_response(204)
+        self._write_cors_headers()
+        self.end_headers()
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         route = parse_map_asset_path(parsed.path)
         if route is None:
-            self.send_error(404)
+            self._send_error_with_cors(404)
             return
         map_name, file_name = route
         target = resolve_map_asset_file(self.optimized_root, map_name, file_name)
         if target is None:
-            self.send_error(404)
+            self._send_error_with_cors(404)
             return
 
         data = target.read_bytes()
@@ -94,17 +132,19 @@ class MapAssetRequestHandler(BaseHTTPRequestHandler):
                 self.send_header("Accept-Ranges", "bytes")
                 self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
                 self.send_header("Content-Length", str(len(chunk)))
+                self._write_cors_headers()
                 self.end_headers()
                 self.wfile.write(chunk)
                 return
             except (ValueError, IndexError):
-                self.send_error(416)
+                self._send_error_with_cors(416)
                 return
 
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(len(data)))
+        self._write_cors_headers()
         self.end_headers()
         self.wfile.write(data)
 
@@ -112,12 +152,12 @@ class MapAssetRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         route = parse_map_asset_path(parsed.path)
         if route is None:
-            self.send_error(404)
+            self._send_error_with_cors(404)
             return
         map_name, file_name = route
         target = resolve_map_asset_file(self.optimized_root, map_name, file_name)
         if target is None:
-            self.send_error(404)
+            self._send_error_with_cors(404)
             return
         content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         if target.suffix.lower() == ".glb":
@@ -126,6 +166,7 @@ class MapAssetRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(target.stat().st_size))
+        self._write_cors_headers()
         self.end_headers()
 
 

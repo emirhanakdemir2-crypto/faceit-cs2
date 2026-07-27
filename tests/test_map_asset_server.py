@@ -11,6 +11,7 @@ import urllib.request
 from src.map_asset_server import (
     MapAssetServer,
     MapAssetServerError,
+    cors_allow_origin,
     parse_map_asset_path,
     resolve_map_asset_file,
 )
@@ -112,6 +113,43 @@ class MapAssetServerTests(unittest.TestCase):
     def test_loopback_bind_required(self) -> None:
         with self.assertRaises(MapAssetServerError):
             MapAssetServer(self.optimized, host="0.0.0.0", port=0)
+
+    def test_cors_allows_loopback_viewer_origin(self) -> None:
+        status, _, headers = self._fetch(
+            "/local-map-assets/synthetic_test_arena/manifest.json",
+            headers={"Origin": "http://127.0.0.1:3000"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "http://127.0.0.1:3000")
+
+    def test_cors_blocks_non_loopback_origin(self) -> None:
+        status, _, headers = self._fetch(
+            "/local-map-assets/synthetic_test_arena/manifest.json",
+            headers={"Origin": "https://example.com"},
+        )
+        self.assertEqual(status, 200)
+        self.assertNotIn("Access-Control-Allow-Origin", headers)
+
+    def test_cors_preflight_for_range(self) -> None:
+        request = urllib.request.Request(
+            f"{self.server.base_url}/local-map-assets/synthetic_test_arena/scene.glb",
+            method="OPTIONS",
+            headers={
+                "Origin": "http://127.0.0.1:3000",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "range",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            headers = dict(response.headers.items())
+        self.assertEqual(response.status, 204)
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "http://127.0.0.1:3000")
+        self.assertIn("GET", headers.get("Access-Control-Allow-Methods", ""))
+
+    def test_cors_allow_origin_helper(self) -> None:
+        self.assertEqual(cors_allow_origin("http://127.0.0.1:3000"), "http://127.0.0.1:3000")
+        self.assertEqual(cors_allow_origin("http://localhost:5173"), "http://localhost:5173")
+        self.assertIsNone(cors_allow_origin("https://example.com"))
 
 
 if __name__ == "__main__":
