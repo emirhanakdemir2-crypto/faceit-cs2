@@ -205,7 +205,7 @@ class MapAssetServer:
         self._thread = threading.Thread(
             target=self._httpd.serve_forever,
             name="map-asset-server",
-            daemon=True,
+            daemon=False,
         )
         self._thread.start()
 

@@ -26,6 +26,7 @@ WASM_FILES = ("csdemoparser.wasm", "wasm_exec.js")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 3000
 PORT_RANGE_END = 3099
+REPLAY_RUNNING_MESSAGE = "Replay viewer çalışıyor — durdurmak için Ctrl+C"
 
 REPLAY_MODE_FLAG = "replay_demo"
 REPLAY_SMALLEST_FLAG = "replay_demo_smallest"
@@ -355,16 +356,48 @@ def start_vite_process(
     merged_env = os.environ.copy()
     if env:
         merged_env.update(env)
-    popen_kwargs = {
+    popen_kwargs: dict[str, object] = {
         "cwd": cwd,
         "stdout": subprocess.PIPE,
         "stderr": subprocess.STDOUT,
         "text": True,
         "env": merged_env,
     }
+    return subprocess.Popen(cmd, shell=False, **popen_kwargs)
+
+
+def _terminate_process(proc: subprocess.Popen[str]) -> None:
+    if proc.poll() is not None:
+        return
     if sys.platform == "win32":
-        return subprocess.Popen(subprocess.list2cmdline(cmd), shell=True, **popen_kwargs)
-    return subprocess.Popen(cmd, **popen_kwargs)
+        subprocess.run(
+            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def _shutdown_replay_services(
+    proc: subprocess.Popen[str] | None,
+    map_server: MapAssetServer | None,
+) -> None:
+    if proc is not None:
+        _terminate_process(proc)
+    if map_server is not None:
+        map_server.stop()
 
 
 def start_map_asset_server(host: str = DEFAULT_HOST) -> MapAssetServer | None:
@@ -436,13 +469,9 @@ def launch_replay_demo(
         return 1
 
     if not wait_for_server(host, port):
-        proc.terminate()
+        _terminate_process(proc)
         if map_server is not None:
             map_server.stop()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
         console.print("[red]Viewer sunucusu zaman aşımına uğradı.[/red]")
         return 1
 
@@ -463,17 +492,14 @@ def launch_replay_demo(
         webbrowser.open(url)
 
     if block:
+        console.print(f"[dim]{REPLAY_RUNNING_MESSAGE}[/dim]")
         try:
-            proc.wait()
+            while proc.poll() is None:
+                time.sleep(0.25)
         except KeyboardInterrupt:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            console.print("\n[yellow]Replay viewer kapatılıyor...[/yellow]")
         finally:
-            if map_server is not None:
-                map_server.stop()
+            _shutdown_replay_services(proc, map_server)
     elif map_server is not None:
         map_server.stop()
 

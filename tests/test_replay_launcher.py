@@ -114,7 +114,7 @@ class ReplayLauncherTests(ReplayLauncherTestCase):
         demo = self.root / "match.dem"
         demo.write_bytes(b"dem")
         proc = MagicMock()
-        proc.wait.return_value = 0
+        proc.poll.return_value = 0
 
         with self._patch_viewer_paths():
             with patch("shutil.which", return_value="npm"):
@@ -122,16 +122,84 @@ class ReplayLauncherTests(ReplayLauncherTestCase):
                     with patch("src.replay_launcher.subprocess.Popen", return_value=proc) as popen_mock:
                         with patch("src.replay_launcher.wait_for_server", return_value=True):
                             with patch("src.replay_launcher.webbrowser.open") as browser_mock:
-                                code = replay_launcher.launch_replay_demo(
-                                    str(demo), open_browser=True, block=True, nickname="Jurses"
-                                )
+                                with patch(
+                                    "src.replay_launcher._shutdown_replay_services",
+                                ) as shutdown_mock:
+                                    buffer = StringIO()
+                                    test_console = replay_launcher.console.__class__(
+                                        file=buffer,
+                                        force_terminal=True,
+                                    )
+                                    with patch.object(replay_launcher, "console", test_console):
+                                        code = replay_launcher.launch_replay_demo(
+                                            str(demo),
+                                            open_browser=True,
+                                            block=True,
+                                            nickname="Jurses",
+                                        )
 
         self.assertEqual(code, 0)
         popen_mock.assert_called_once()
         cmd = popen_mock.call_args.args[0]
-        self.assertIn("--host", cmd)
-        self.assertIn("127.0.0.1", cmd)
+        self.assertEqual(cmd[-4:], ["--host", "127.0.0.1", "--port", "3000"])
+        self.assertIs(popen_mock.call_args.kwargs.get("shell"), False)
         browser_mock.assert_called_once_with("http://127.0.0.1:3000/?nickname=Jurses")
+        shutdown_mock.assert_called_once()
+        self.assertIn(replay_launcher.REPLAY_RUNNING_MESSAGE, buffer.getvalue())
+
+    def test_launch_ctrl_c_shuts_down_services(self) -> None:
+        demo = self.root / "match.dem"
+        demo.write_bytes(b"dem")
+        proc = MagicMock()
+        proc.poll.return_value = None
+
+        with self._patch_viewer_paths():
+            with patch("shutil.which", return_value="npm"):
+                with patch("src.replay_launcher.pick_port", return_value=3000):
+                    with patch("src.replay_launcher.subprocess.Popen", return_value=proc):
+                        with patch("src.replay_launcher.wait_for_server", return_value=True):
+                            with patch(
+                                "src.replay_launcher._shutdown_replay_services",
+                            ) as shutdown_mock:
+                                with patch(
+                                    "src.replay_launcher.time.sleep",
+                                    side_effect=KeyboardInterrupt(),
+                                ):
+                                    code = replay_launcher.launch_replay_demo(
+                                        str(demo),
+                                        open_browser=False,
+                                        block=True,
+                                    )
+
+        self.assertEqual(code, 0)
+        shutdown_mock.assert_called_once()
+
+    def test_launch_keeps_map_server_until_vite_exits(self) -> None:
+        demo = self.root / "match.dem"
+        demo.write_bytes(b"dem")
+        proc = MagicMock()
+        proc.poll.side_effect = [None, None, 0, 0]
+        map_server = MagicMock()
+
+        with self._patch_viewer_paths():
+            with patch("shutil.which", return_value="npm"):
+                with patch("src.replay_launcher.pick_port", return_value=3000):
+                    with patch("src.replay_launcher.subprocess.Popen", return_value=proc):
+                        with patch("src.replay_launcher.wait_for_server", return_value=True):
+                            with patch(
+                                "src.replay_launcher.start_map_asset_server",
+                                return_value=map_server,
+                            ):
+                                with patch("src.replay_launcher.time.sleep", side_effect=lambda _: None):
+                                    code = replay_launcher.launch_replay_demo(
+                                        str(demo),
+                                        open_browser=False,
+                                        block=True,
+                                    )
+
+        self.assertEqual(code, 0)
+        self.assertGreaterEqual(proc.poll.call_count, 3)
+        map_server.stop.assert_called_once()
 
     def test_select_smallest_valid_demo_skips_invalid_header(self) -> None:
         demos = self.root / "data" / "demos"
